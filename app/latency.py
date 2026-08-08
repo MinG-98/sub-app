@@ -32,7 +32,6 @@ from sqlalchemy import select
 from app.converter import parse_uri
 from app.models import Node, make_session_factory
 
-
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = os.environ.get("SUB_APP_DB", str(ROOT / "data.db"))
 STATUS_PATH = Path(
@@ -41,9 +40,7 @@ STATUS_PATH = Path(
 LOCK_PATH = Path(
     os.environ.get("SUB_APP_LATENCY_LOCK", "/var/lib/sub-app/latency-probe.lock")
 )
-TMP_ROOT = Path(
-    os.environ.get("SUB_APP_LATENCY_TMP", "/var/lib/sub-app/latency-tmp")
-)
+TMP_ROOT = Path(os.environ.get("SUB_APP_LATENCY_TMP", "/var/lib/sub-app/latency-tmp"))
 TARGET_URL = os.environ.get(
     "SUB_APP_LATENCY_TARGET", "https://www.gstatic.com/generate_204"
 )
@@ -102,7 +99,10 @@ def start_probe() -> dict:
     script = ROOT / "scripts" / "latency_probe.py"
     try:
         subprocess.Popen(
-            [os.environ.get("SUB_APP_PYTHON", str(ROOT / "venv/bin/python")), str(script)],
+            [
+                os.environ.get("SUB_APP_PYTHON", str(ROOT / "venv/bin/python")),
+                str(script),
+            ],
             cwd=str(ROOT),
             env=os.environ.copy(),
             stdin=subprocess.DEVNULL,
@@ -115,9 +115,17 @@ def start_probe() -> dict:
     return {"ok": True, "started": True, "status": "running"}
 
 
-def _result(state: str, ms: int | None = None, reason: str = "", source: str = "") -> dict:
-    value = "正常" if state == "ok" else (
-        "未就绪" if state == "unsupported" else "探测中" if state == "pending" else "不可达"
+def _result(
+    state: str, ms: int | None = None, reason: str = "", source: str = ""
+) -> dict:
+    value = (
+        "正常"
+        if state == "ok"
+        else (
+            "未就绪"
+            if state == "unsupported"
+            else "探测中" if state == "pending" else "不可达"
+        )
     )
     if state == "ok" and ms is not None:
         value = f"{ms} ms"
@@ -140,7 +148,11 @@ def _remark_node(node: Node, parsed: dict | None) -> bool:
 
 
 def _endpoint(host: str, port: int) -> str:
-    return f"[{host}]:{port}" if ":" in host and not host.startswith("[") else f"{host}:{port}"
+    return (
+        f"[{host}]:{port}"
+        if ":" in host and not host.startswith("[")
+        else f"{host}:{port}"
+    )
 
 
 def _socket_probe(host: str, port: int, timeout: float = 4.0) -> dict:
@@ -160,7 +172,11 @@ def _socket_probe(host: str, port: int, timeout: float = 4.0) -> dict:
         except TimeoutError:
             last_error = "连接超时"
         except OSError as exc:
-            last_error = "连接被拒绝" if getattr(exc, "errno", None) in {111, 61, 10061} else "连接失败"
+            last_error = (
+                "连接被拒绝"
+                if getattr(exc, "errno", None) in {111, 61, 10061}
+                else "连接失败"
+            )
         finally:
             sock.close()
     return _result("bad", reason=last_error, source="tcp")
@@ -172,7 +188,11 @@ def _local_probe() -> dict:
         request = Request(LOCAL_HEALTH_URL, headers={"Accept": "application/json"})
         with urlopen(request, timeout=4) as response:
             response.read(1024)
-        return _result("ok", max(1, round((time.perf_counter() - started) * 1000)), source="healthz")
+        return _result(
+            "ok",
+            max(1, round((time.perf_counter() - started) * 1000)),
+            source="healthz",
+        )
     except Exception:
         return _result("bad", reason="控制面不可达", source="healthz")
 
@@ -228,7 +248,9 @@ def _hysteria_probe(parsed: dict) -> dict:
         output = (completed.stdout or "") + "\n" + (completed.stderr or "")
         match = TIME_RE.search(output)
         if completed.returncode == 0 and match:
-            return _result("ok", max(1, round(float(match.group(1)))), source="hysteria-ping")
+            return _result(
+                "ok", max(1, round(float(match.group(1)))), source="hysteria-ping"
+            )
         if completed.returncode == 0:
             return _result("ok", source="hysteria-ping")
         return _result("bad", reason="HY2 握手或出口失败", source="hysteria-ping")
@@ -272,13 +294,19 @@ def _sing_box_config(parsed: dict, port: int) -> dict:
         outbound["transport"] = transport
     elif params.get("type") == "grpc":
         outbound["transport"] = {
-            "type": "grpc", "service_name": params.get("serviceName", "")
+            "type": "grpc",
+            "service_name": params.get("serviceName", ""),
         }
     return {
         "log": {"disabled": True},
-        "inbounds": [{
-            "type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": port
-        }],
+        "inbounds": [
+            {
+                "type": "mixed",
+                "tag": "mixed-in",
+                "listen": "127.0.0.1",
+                "listen_port": port,
+            }
+        ],
         "outbounds": [outbound, {"type": "direct", "tag": "direct"}],
         "route": {"final": "proxy"},
     }
@@ -303,14 +331,17 @@ def _sing_box_probe(parsed: dict) -> dict:
             json.dump(_sing_box_config(parsed, port), handle, ensure_ascii=False)
         checked = subprocess.run(
             [SING_BOX_BIN, "check", "-c", str(path)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=20, check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+            check=False,
         )
         if checked.returncode:
             return _result("bad", reason="VLESS 配置校验失败", source="sing-box")
         process = subprocess.Popen(
             [SING_BOX_BIN, "run", "-c", str(path)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
         ready = False
@@ -328,13 +359,33 @@ def _sing_box_probe(parsed: dict) -> dict:
         curl = shutil.which("curl") or "/usr/bin/curl"
         started = time.perf_counter()
         completed = subprocess.run(
-            [curl, "--proxy", f"socks5h://127.0.0.1:{port}", "-sS", "-o", os.devnull,
-             "-w", "%{http_code}", "--connect-timeout", "5", "--max-time", "12", TARGET_URL],
-            capture_output=True, text=True, timeout=18, check=False,
+            [
+                curl,
+                "--proxy",
+                f"socks5h://127.0.0.1:{port}",
+                "-sS",
+                "-o",
+                os.devnull,
+                "-w",
+                "%{http_code}",
+                "--connect-timeout",
+                "5",
+                "--max-time",
+                "12",
+                TARGET_URL,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=18,
+            check=False,
         )
         code = (completed.stdout or "").strip()
         if completed.returncode == 0 and code[:1] in {"2", "3"}:
-            return _result("ok", max(1, round((time.perf_counter() - started) * 1000)), source="sing-box")
+            return _result(
+                "ok",
+                max(1, round((time.perf_counter() - started) * 1000)),
+                source="sing-box",
+            )
         return _result("bad", reason="VLESS 代理出口失败", source="sing-box")
     except subprocess.TimeoutExpired:
         return _result("bad", reason="代理出口超时", source="sing-box")
@@ -356,7 +407,9 @@ def _probe_node(node: dict) -> dict:
     parsed = parse_uri(node["uri"])
     if not parsed or not parsed.get("host") or not parsed.get("port"):
         return {
-            "node_id": node["id"], "name": node["name"], "protocol": node["protocol"],
+            "node_id": node["id"],
+            "name": node["name"],
+            "protocol": node["protocol"],
             "entry": _result("bad", reason="节点链接无效"),
             "proxy": _result("bad", reason="节点链接无效"),
         }
@@ -365,7 +418,11 @@ def _probe_node(node: dict) -> dict:
         proxy = _hysteria_probe(parsed)
         entry = dict(proxy)
         entry["source"] = "hysteria-handshake"
-        entry["reason"] = "HY2 握手与代理出口同次验证" if proxy.get("state") == "ok" else proxy.get("reason", "")
+        entry["reason"] = (
+            "HY2 握手与代理出口同次验证"
+            if proxy.get("state") == "ok"
+            else proxy.get("reason", "")
+        )
     elif protocol == "vless":
         entry = _socket_probe(parsed["host"], int(parsed["port"]))
         proxy = _sing_box_probe(parsed)
@@ -373,8 +430,11 @@ def _probe_node(node: dict) -> dict:
         entry = _socket_probe(parsed["host"], int(parsed["port"]))
         proxy = _result("unsupported", reason="协议暂未适配", source="probe")
     return {
-        "node_id": node["id"], "name": node["name"], "protocol": protocol,
-        "entry": entry, "proxy": proxy,
+        "node_id": node["id"],
+        "name": node["name"],
+        "protocol": protocol,
+        "entry": entry,
+        "proxy": proxy,
     }
 
 
@@ -383,7 +443,11 @@ def _summary(nodes: list[dict]) -> dict:
         return sum(row.get(kind, {}).get("state") == "ok" for row in nodes)
 
     def average(kind: str) -> int | None:
-        values = [row[kind].get("ms") for row in nodes if row.get(kind, {}).get("ms") is not None]
+        values = [
+            row[kind].get("ms")
+            for row in nodes
+            if row.get(kind, {}).get("ms") is not None
+        ]
         return round(sum(values) / len(values)) if values else None
 
     return {
@@ -404,41 +468,72 @@ def run_probes() -> None:
         return
     started = _now()
     try:
-        _write_json({
-            "status": "running", "started_at": started, "finished_at": None,
-            "control": {"state": "pending", "value": "探测中"},
-            "summary": {"nodes_total": 0, "entry_ok": 0, "proxy_ok": 0},
-            "nodes": [], "target": {"url": TARGET_URL},
-        })
+        _write_json(
+            {
+                "status": "running",
+                "started_at": started,
+                "finished_at": None,
+                "control": {"state": "pending", "value": "探测中"},
+                "summary": {"nodes_total": 0, "entry_ok": 0, "proxy_ok": 0},
+                "nodes": [],
+                "target": {"url": TARGET_URL},
+            }
+        )
         factory = make_session_factory(DB_PATH)
         db = factory()
         try:
-            candidates = db.scalars(select(Node).where(Node.enabled.is_(True)).order_by(Node.sort_order, Node.id)).all()
+            candidates = db.scalars(
+                select(Node)
+                .where(Node.enabled.is_(True))
+                .order_by(Node.sort_order, Node.id)
+            ).all()
             nodes = []
             for item in candidates:
                 parsed = parse_uri(item.uri)
                 if _remark_node(item, parsed):
                     continue
-                nodes.append({"id": item.id, "name": item.name, "protocol": item.protocol, "uri": item.uri})
+                nodes.append(
+                    {
+                        "id": item.id,
+                        "name": item.name,
+                        "protocol": item.protocol,
+                        "uri": item.uri,
+                    }
+                )
         finally:
             db.close()
         with ThreadPoolExecutor(max_workers=min(6, max(1, len(nodes)))) as pool:
             results = list(pool.map(_probe_node, nodes))
         summary = _summary(results)
         all_ok = bool(results) and summary["proxy_ok"] == summary["nodes_total"]
-        _write_json({
-            "status": "success" if all_ok else "partial",
-            "started_at": started, "finished_at": _now(),
-            "control": _local_probe(), "summary": summary, "nodes": results,
-            "target": {"url": TARGET_URL},
-        })
+        _write_json(
+            {
+                "status": "success" if all_ok else "partial",
+                "started_at": started,
+                "finished_at": _now(),
+                "control": _local_probe(),
+                "summary": summary,
+                "nodes": results,
+                "target": {"url": TARGET_URL},
+            }
+        )
     except Exception as exc:
-        _write_json({
-            "status": "error", "started_at": started, "finished_at": _now(),
-            "control": {"state": "bad", "value": "不可用", "reason": "探测任务失败"},
-            "summary": {"nodes_total": 0, "entry_ok": 0, "proxy_ok": 0},
-            "nodes": [], "target": {"url": TARGET_URL}, "error": type(exc).__name__,
-        })
+        _write_json(
+            {
+                "status": "error",
+                "started_at": started,
+                "finished_at": _now(),
+                "control": {
+                    "state": "bad",
+                    "value": "不可用",
+                    "reason": "探测任务失败",
+                },
+                "summary": {"nodes_total": 0, "entry_ok": 0, "proxy_ok": 0},
+                "nodes": [],
+                "target": {"url": TARGET_URL},
+                "error": type(exc).__name__,
+            }
+        )
     finally:
         try:
             LOCK_PATH.unlink()

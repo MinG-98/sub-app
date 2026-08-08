@@ -15,12 +15,10 @@ from fastapi import Body, Depends, HTTPException, Request
 from sqlalchemy import insert, select
 
 from app.credentials import credential_stats_id, credential_values
-from app.models import Friend, FlowRecord, Node, NodeAgent, UserNodeCredential, utcnow
+from app.models import FlowRecord, Friend, Node, NodeAgent, UserNodeCredential, utcnow
 from app.proxy_adapters import (
-    LOCAL_SUPPORTED_NODES,
     REMOTE_AGENT_NODES,
     SUPPORTED_NODES,
-    node_per_user_enabled,
 )
 
 
@@ -83,8 +81,10 @@ def _authorization_token(request: Request) -> str:
 def _require_agent(request: Request, db, node_id: int) -> NodeAgent:
     agent = db.scalar(select(NodeAgent).where(NodeAgent.node_id == node_id))
     supplied = _authorization_token(request)
-    if not agent or not supplied or not hmac.compare_digest(
-        token_hash(supplied), agent.token_hash
+    if (
+        not agent
+        or not supplied
+        or not hmac.compare_digest(token_hash(supplied), agent.token_hash)
     ):
         raise HTTPException(status_code=401, detail="节点 Agent 未授权")
     return agent
@@ -149,7 +149,9 @@ def _desired_payload(db, node: Node, agent: NodeAgent) -> dict:
         "apply": apply_enabled,
         "users": users,
     }
-    encoded = json.dumps(unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    encoded = json.dumps(
+        unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
     generation = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
     agent.desired_generation = generation
     agent.updated_at = utcnow()
@@ -183,16 +185,20 @@ def _record_traffic(db, node_id: int, payload) -> int:
         except (TypeError, ValueError):
             bucket = _utc_naive(utcnow())
         source = str(item.get("source") or row.protocol)[:32]
-        statement = insert(FlowRecord).prefix_with("OR IGNORE").values(
-            node_id=node_id,
-            friend_id=row.friend_id,
-            device_id=None,
-            bytes_in=_safe_int(item.get("bytes_in")),
-            bytes_out=_safe_int(item.get("bytes_out")),
-            bucket=bucket,
-            source=source,
-            sample_key=sample_key,
-            created_at=utcnow(),
+        statement = (
+            insert(FlowRecord)
+            .prefix_with("OR IGNORE")
+            .values(
+                node_id=node_id,
+                friend_id=row.friend_id,
+                device_id=None,
+                bytes_in=_safe_int(item.get("bytes_in")),
+                bytes_out=_safe_int(item.get("bytes_out")),
+                bucket=bucket,
+                source=source,
+                sample_key=sample_key,
+                created_at=utcnow(),
+            )
         )
         result = db.execute(statement)
         written += int(result.rowcount or 0)
@@ -248,7 +254,9 @@ def register_agent_routes(app, session_factory, get_db, require_admin):
         if not isinstance(capabilities, dict):
             capabilities = {}
         agent.agent_version = str(payload.get("agent_version", ""))[:64]
-        agent.capabilities = json.dumps(capabilities, ensure_ascii=True, separators=(",", ":"))[:8000]
+        agent.capabilities = json.dumps(
+            capabilities, ensure_ascii=True, separators=(",", ":")
+        )[:8000]
         agent.last_seen = utcnow()
         agent.updated_at = utcnow()
         agent.applied_generation = str(payload.get("applied_generation", ""))[:128]

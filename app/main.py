@@ -4,41 +4,31 @@ import json
 import os
 import re
 import secrets
-import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 from sqlalchemy import func, select
 
+from app.converter import parse_uri, render
 from app.credentials import (
     credential_public_dict,
     ensure_credential,
     per_user_feature_enabled,
     render_credential_uri,
 )
-from app.proxy_adapters import (
-    SUPPORTED_NODES,
-    activate_credential,
-    adapter_marker,
-    adapter_ready,
-    capability,
-    credential_stats_id,
-    node_per_user_enabled,
-    sync_vless_config,
-)
-from app.converter import parse_uri, render
+from app.latency import read_status, start_probe
 from app.models import (
     Allocation,
     CollectorRun,
     Device,
     FetchLog,
-    Friend,
     FlowRecord,
+    Friend,
     Node,
     NodeAgent,
     NodeMetricSample,
@@ -47,13 +37,21 @@ from app.models import (
     new_token,
     utcnow,
 )
+from app.proxy_adapters import (
+    SUPPORTED_NODES,
+    activate_credential,
+    adapter_marker,
+    adapter_ready,
+    capability,
+    node_per_user_enabled,
+    sync_vless_config,
+)
 from app.traffic import (
     CollectorError,
     collector_config,
     fetch_servers,
     is_collector_configured,
 )
-from app.latency import read_status, start_probe
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = os.environ.get("SUB_APP_DB", str(BASE_DIR / "data.db"))
@@ -189,7 +187,11 @@ def _reconcile_friend_credentials(db, friend: Friend):
 
     for node_id in wanted:
         node = db.get(Node, node_id)
-        if not node or node_id not in SUPPORTED_NODES or not node_per_user_enabled(node):
+        if (
+            not node
+            or node_id not in SUPPORTED_NODES
+            or not node_per_user_enabled(node)
+        ):
             continue
         if node.protocol != SUPPORTED_NODES[node_id]["protocol"]:
             continue
@@ -386,14 +388,18 @@ def node_traffic(
     if days is None:
         raise HTTPException(400, "range 只能是 24h、7d 或 30d")
     since = utcnow() - timedelta(days=days)
-    rows = db.execute(
-        select(NodeMetricSample)
-        .where(
-            NodeMetricSample.node_id == node_id,
-            NodeMetricSample.bucket >= since.replace(tzinfo=None),
+    rows = (
+        db.execute(
+            select(NodeMetricSample)
+            .where(
+                NodeMetricSample.node_id == node_id,
+                NodeMetricSample.bucket >= since.replace(tzinfo=None),
+            )
+            .order_by(NodeMetricSample.bucket)
         )
-        .order_by(NodeMetricSample.bucket)
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     total_in = sum(row.delta_in for row in rows)
     total_out = sum(row.delta_out for row in rows)
     return {
@@ -428,8 +434,7 @@ def _topology_agent_state(agent):
     if last_seen is not None and last_seen.tzinfo is None:
         last_seen = last_seen.replace(tzinfo=timezone.utc)
     online = bool(
-        last_seen is not None
-        and (utcnow() - last_seen).total_seconds() <= 180
+        last_seen is not None and (utcnow() - last_seen).total_seconds() <= 180
     )
     return {
         "configured": True,
@@ -456,13 +461,11 @@ def overview_topology(db=Depends(get_db), _=Depends(require_admin)):
     friends = db.scalars(select(Friend).order_by(Friend.id)).all()
     nodes = db.scalars(select(Node).order_by(Node.sort_order, Node.id)).all()
     allocations = db.execute(
-        select(Allocation.friend_id, Allocation.node_id)
-        .order_by(Allocation.friend_id, Allocation.node_id)
+        select(Allocation.friend_id, Allocation.node_id).order_by(
+            Allocation.friend_id, Allocation.node_id
+        )
     ).all()
-    agents = {
-        agent.node_id: agent
-        for agent in db.scalars(select(NodeAgent)).all()
-    }
+    agents = {agent.node_id: agent for agent in db.scalars(select(NodeAgent)).all()}
     by_friend = {}
     for friend_id, node_id in allocations:
         by_friend.setdefault(friend_id, []).append(node_id)
@@ -548,7 +551,9 @@ def overview_topology(db=Depends(get_db), _=Depends(require_admin)):
         "summary": {
             "users": sum(1 for item in graph_nodes.values() if item["type"] == "user"),
             "nodes": sum(1 for item in graph_nodes.values() if item["type"] == "node"),
-            "servers": sum(1 for item in graph_nodes.values() if item["type"] == "server"),
+            "servers": sum(
+                1 for item in graph_nodes.values() if item["type"] == "server"
+            ),
             "relations": sum(1 for edge in edges if edge["kind"] == "allocation"),
         },
         "nodes": list(graph_nodes.values()),
@@ -662,7 +667,9 @@ def create_nodes(
     bulk = payload.get("bulk", "")
     created, skipped = [], []
 
-    raw_list = [l.strip() for l in bulk.splitlines() if l.strip()] if bulk else []
+    raw_list = (
+        [line.strip() for line in bulk.splitlines() if line.strip()] if bulk else []
+    )
     if payload.get("uri"):
         raw_list.append(payload["uri"].strip())
 
@@ -679,7 +686,9 @@ def create_nodes(
             continue
         max_order += 1
         node = Node(
-            name=payload.get("name") or parsed["name"] or f"{parsed['scheme']}-{parsed['host']}",
+            name=payload.get("name")
+            or parsed["name"]
+            or f"{parsed['scheme']}-{parsed['host']}",
             protocol=parsed["scheme"],
             uri=raw,
             server=parsed["host"],
@@ -694,7 +703,10 @@ def create_nodes(
 
 @app.patch("/api/admin/nodes/{node_id}")
 def update_node(
-    node_id: int, payload: dict = Body(...), db=Depends(get_db), _=Depends(require_admin)
+    node_id: int,
+    payload: dict = Body(...),
+    db=Depends(get_db),
+    _=Depends(require_admin),
 ):
     node = db.get(Node, node_id)
     if not node:
@@ -702,7 +714,11 @@ def update_node(
     if payload.get("per_user_enabled") and not adapter_ready(node_id, db):
         raise HTTPException(409, "该节点的代理适配器尚未就绪")
     for field in (
-        "name", "enabled", "sort_order", "nezha_server_id", "per_user_enabled"
+        "name",
+        "enabled",
+        "sort_order",
+        "nezha_server_id",
+        "per_user_enabled",
     ):
         if field in payload:
             setattr(node, field, payload[field])
@@ -782,20 +798,21 @@ def friend_dict(
     f: Friend, node_ids: list[int], device_count: int = 0, usage=None, db=None
 ):
     base = PUBLIC_BASE or ""
-    usage = usage or (_friend_usage(db, f.id) if db is not None else {
-        "bytes_in": 0, "bytes_out": 0
-    })
+    usage = usage or (
+        _friend_usage(db, f.id) if db is not None else {"bytes_in": 0, "bytes_out": 0}
+    )
     used = usage["bytes_in"] + usage["bytes_out"]
-    limit = f.flow_limit_gb * 1024 ** 3
+    limit = f.flow_limit_gb * 1024**3
     percent = (used / limit * 100) if limit else 0
-    alert = "over" if limit and used >= limit else (
-        "warning" if limit and used >= limit * 0.8 else "ok"
+    alert = (
+        "over"
+        if limit and used >= limit
+        else ("warning" if limit and used >= limit * 0.8 else "ok")
     )
     credential_status = []
     if db is not None:
         credential_status = [
-            credential_public_dict(row)
-            for row in _credential_rows_for_friend(db, f.id)
+            credential_public_dict(row) for row in _credential_rows_for_friend(db, f.id)
         ]
     unsupported = [node_id for node_id in node_ids if node_id not in SUPPORTED_NODES]
     return {
@@ -874,9 +891,7 @@ def create_friend(
     db.flush()
     _reconcile_friend_credentials(db, friend)
     db.commit()
-    return friend_dict(
-        friend, node_ids, db=db
-    )
+    return friend_dict(friend, node_ids, db=db)
 
 
 @app.patch("/api/admin/friends/{friend_id}")
@@ -891,7 +906,10 @@ def update_friend(
         raise HTTPException(404, "用户不存在")
 
     for field in (
-        "remark", "enabled", "flow_limit_gb", "device_limit",
+        "remark",
+        "enabled",
+        "flow_limit_gb",
+        "device_limit",
         "per_user_credentials",
     ):
         if field in payload:
@@ -978,9 +996,7 @@ def friend_traffic(
 
 
 @app.get("/api/admin/friends/{friend_id}/credentials")
-def friend_credentials(
-    friend_id: int, db=Depends(get_db), _=Depends(require_admin)
-):
+def friend_credentials(friend_id: int, db=Depends(get_db), _=Depends(require_admin)):
     if not db.get(Friend, friend_id):
         raise HTTPException(404, "用户不存在")
     rows = db.scalars(
@@ -1008,9 +1024,7 @@ def friend_credentials(
 
 
 @app.post("/api/admin/credentials/{credential_id}/sync")
-def sync_credential(
-    credential_id: int, db=Depends(get_db), _=Depends(require_admin)
-):
+def sync_credential(credential_id: int, db=Depends(get_db), _=Depends(require_admin)):
     row = db.get(UserNodeCredential, credential_id)
     if not row:
         raise HTTPException(404, "凭据不存在")
@@ -1023,9 +1037,7 @@ def sync_credential(
 
 
 @app.post("/api/admin/credentials/{credential_id}/rotate")
-def rotate_credential(
-    credential_id: int, db=Depends(get_db), _=Depends(require_admin)
-):
+def rotate_credential(credential_id: int, db=Depends(get_db), _=Depends(require_admin)):
     old = db.get(UserNodeCredential, credential_id)
     if not old:
         raise HTTPException(404, "凭据不存在")
@@ -1074,9 +1086,7 @@ def rotate_credential(
 
 
 @app.post("/api/admin/credentials/{credential_id}/revoke")
-def revoke_credential(
-    credential_id: int, db=Depends(get_db), _=Depends(require_admin)
-):
+def revoke_credential(credential_id: int, db=Depends(get_db), _=Depends(require_admin)):
     row = db.get(UserNodeCredential, credential_id)
     if not row:
         raise HTTPException(404, "凭据不存在")
@@ -1125,9 +1135,10 @@ def create_device_link(
     friend = db.get(Friend, friend_id)
     if not friend:
         raise HTTPException(404, "用户不存在")
-    count = db.scalar(
-        select(func.count(Device.id)).where(Device.friend_id == friend_id)
-    ) or 0
+    count = (
+        db.scalar(select(func.count(Device.id)).where(Device.friend_id == friend_id))
+        or 0
+    )
     if friend.device_limit and count >= friend.device_limit:
         raise HTTPException(409, "设备数已达上限")
     raw_token = secrets.token_urlsafe(24)
@@ -1181,9 +1192,7 @@ def rotate_device_link(
 
 
 @app.post("/api/admin/devices/{device_id}/revoke-link")
-def revoke_device_link(
-    device_id: int, db=Depends(get_db), _=Depends(require_admin)
-):
+def revoke_device_link(device_id: int, db=Depends(get_db), _=Depends(require_admin)):
     dev = db.get(Device, device_id)
     if not dev:
         raise HTTPException(404, "设备不存在")
@@ -1304,7 +1313,11 @@ def subscription(
         )
         if device_link is None and not _is_legacy_device_value(supplied_device):
             raise HTTPException(404, "设备订阅链接无效")
-    fp = device_link.fingerprint if device_link else fingerprint_of(request, supplied_device or None)
+    fp = (
+        device_link.fingerprint
+        if device_link
+        else fingerprint_of(request, supplied_device or None)
+    )
     dev = device_link or db.scalar(
         select(Device).where(Device.friend_id == friend.id, Device.fingerprint == fp)
     )
@@ -1389,9 +1402,11 @@ def subscription(
     headers = {
         "profile-update-interval": "12",
         "x-sub-app-skipped-nodes": str(len(skipped_nodes)),
-        "content-disposition": f'attachment; filename="{friend.uid}.yaml"'
-        if target.startswith("clash")
-        else f'attachment; filename="{friend.uid}.txt"',
+        "content-disposition": (
+            f'attachment; filename="{friend.uid}.yaml"'
+            if target.startswith("clash")
+            else f'attachment; filename="{friend.uid}.txt"'
+        ),
     }
     return PlainTextResponse(body, media_type=content_type, headers=headers)
 

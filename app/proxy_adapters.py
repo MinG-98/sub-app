@@ -7,9 +7,9 @@ reported a healthy, applied generation.
 
 from __future__ import annotations
 
-import json
 import hashlib
 import hmac
+import json
 import os
 import subprocess
 import tempfile
@@ -20,7 +20,6 @@ from sqlalchemy import select
 
 from app.credentials import credential_stats_id, credential_values
 from app.models import Friend, Node, NodeAgent, UserNodeCredential, utcnow
-
 
 ADAPTER_ENV_FILE = Path(
     os.environ.get("SUB_APP_PROXY_ADAPTERS_ENV", "/etc/sub-app/proxy-adapters.env")
@@ -36,18 +35,42 @@ LOCAL_SUPPORTED_NODES = {4, 11}
 
 REMOTE_AGENT_NODES = {
     5: {"protocol": "vless", "source": "vless", "label": "VLESS 节点 Agent"},
-    6: {"protocol": "hysteria2", "source": "hysteria2", "label": "Hysteria2 节点 Agent"},
-    7: {"protocol": "hysteria2", "source": "hysteria2", "label": "Hysteria2 节点 Agent"},
-    8: {"protocol": "hysteria2", "source": "hysteria2", "label": "Hysteria2 节点 Agent"},
-    9: {"protocol": "hysteria2", "source": "hysteria2", "label": "Hysteria2 节点 Agent"},
-    10: {"protocol": "hysteria2", "source": "hysteria2", "label": "Hysteria2 节点 Agent"},
+    6: {
+        "protocol": "hysteria2",
+        "source": "hysteria2",
+        "label": "Hysteria2 节点 Agent",
+    },
+    7: {
+        "protocol": "hysteria2",
+        "source": "hysteria2",
+        "label": "Hysteria2 节点 Agent",
+    },
+    8: {
+        "protocol": "hysteria2",
+        "source": "hysteria2",
+        "label": "Hysteria2 节点 Agent",
+    },
+    9: {
+        "protocol": "hysteria2",
+        "source": "hysteria2",
+        "label": "Hysteria2 节点 Agent",
+    },
+    10: {
+        "protocol": "hysteria2",
+        "source": "hysteria2",
+        "label": "Hysteria2 节点 Agent",
+    },
     12: {"protocol": "vless", "source": "vless", "label": "VLESS 节点 Agent"},
     13: {"protocol": "vless", "source": "vless", "label": "VLESS 节点 Agent"},
     14: {"protocol": "vless", "source": "vless", "label": "VLESS 节点 Agent"},
     15: {"protocol": "vless", "source": "vless", "label": "VLESS 节点 Agent"},
     16: {"protocol": "vless", "source": "vless", "label": "VLESS 节点 Agent"},
     17: {"protocol": "vless", "source": "vless", "label": "VLESS 节点 Agent"},
-    18: {"protocol": "hysteria2", "source": "hysteria2", "label": "Hysteria2 节点 Agent"},
+    18: {
+        "protocol": "hysteria2",
+        "source": "hysteria2",
+        "label": "Hysteria2 节点 Agent",
+    },
 }
 
 SUPPORTED_NODES = {
@@ -87,7 +110,10 @@ def adapter_ready(node_id: int, db=None) -> bool:
         if not agent or agent.status != "ready" or not agent.last_seen:
             return False
         last_seen = _db_utc(agent.last_seen)
-        return bool(last_seen and (utcnow().replace(tzinfo=None) - last_seen).total_seconds() <= 180)
+        return bool(
+            last_seen
+            and (utcnow().replace(tzinfo=None) - last_seen).total_seconds() <= 180
+        )
     return False
 
 
@@ -168,7 +194,11 @@ def capability(node: Node, db=None) -> dict:
         "supported": True,
         "ready": adapter_ready(node.id, db),
         "source": info["source"],
-        "label": info["label"] if node.id in LOCAL_SUPPORTED_NODES or adapter_ready(node.id, db) else "等待节点 Agent 上报并应用",
+        "label": (
+            info["label"]
+            if node.id in LOCAL_SUPPORTED_NODES or adapter_ready(node.id, db)
+            else "等待节点 Agent 上报并应用"
+        ),
     }
 
 
@@ -219,7 +249,11 @@ def sync_vless_config(db, extra: UserNodeCredential | None = None) -> None:
         raise RuntimeError("无法读取 sing-box 配置") from exc
 
     inbound = next(
-        (item for item in config.get("inbounds", []) if item.get("tag") == "reality-in"),
+        (
+            item
+            for item in config.get("inbounds", [])
+            if item.get("tag") == "reality-in"
+        ),
         None,
     )
     if not inbound or inbound.get("type") != "vless":
@@ -230,7 +264,9 @@ def sync_vless_config(db, extra: UserNodeCredential | None = None) -> None:
     keep_legacy = False
     if legacy_until:
         try:
-            keep_legacy = utcnow() < datetime.fromisoformat(legacy_until.replace("Z", "+00:00"))
+            keep_legacy = utcnow() < datetime.fromisoformat(
+                legacy_until.replace("Z", "+00:00")
+            )
         except ValueError:
             keep_legacy = False
     flow = next((u.get("flow", "") for u in old_users if u.get("flow") is not None), "")
@@ -247,7 +283,9 @@ def sync_vless_config(db, extra: UserNodeCredential | None = None) -> None:
         )
     for row in _live_vless_rows(db, extra=extra):
         values = credential_values(row)
-        users.append({"name": credential_stats_id(row), "uuid": values["uuid"], "flow": flow})
+        users.append(
+            {"name": credential_stats_id(row), "uuid": values["uuid"], "flow": flow}
+        )
     if not users:
         raise RuntimeError("VLESS 配置不能没有用户")
     inbound["users"] = users
@@ -262,7 +300,9 @@ def sync_vless_config(db, extra: UserNodeCredential | None = None) -> None:
         },
     }
 
-    fd, temp_name = tempfile.mkstemp(prefix="config.", suffix=".json", dir=str(VLESS_CONFIG.parent))
+    fd, temp_name = tempfile.mkstemp(
+        prefix="config.", suffix=".json", dir=str(VLESS_CONFIG.parent)
+    )
     temp_path = Path(temp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:

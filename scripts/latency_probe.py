@@ -12,6 +12,5 @@ if str(ROOT) not in sys.path:
 
 from app.latency import run_probes  # noqa: E402
 
-
 if __name__ == "__main__":
     run_probes()

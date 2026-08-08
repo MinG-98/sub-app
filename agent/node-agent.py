@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import hashlib
 import json
 import logging
 import os
@@ -25,9 +24,7 @@ import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-
 
 VERSION = "0.3.0"
 
@@ -78,10 +75,16 @@ def command_output(argv: list[str], timeout=8) -> str:
 
 def command_ok(argv: list[str], timeout=20) -> bool:
     try:
-        return subprocess.run(
-            argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=timeout, check=False
-        ).returncode == 0
+        return (
+            subprocess.run(
+                argv,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=timeout,
+                check=False,
+            ).returncode
+            == 0
+        )
     except (OSError, subprocess.SubprocessError):
         return False
 
@@ -116,10 +119,14 @@ class Agent:
         self.config = config
         self.endpoint = str(config.get("endpoint", "")).rstrip("/")
         self.interval = max(10, int(config.get("poll_seconds", 30)))
-        self.state_path = Path(config.get("state_path", "/var/lib/sub-app-node-agent/state.json"))
+        self.state_path = Path(
+            config.get("state_path", "/var/lib/sub-app-node-agent/state.json")
+        )
         self.state = read_json(self.state_path, {"nodes": {}})
         self.state.setdefault("nodes", {})
-        self.nodes = [item for item in config.get("nodes", []) if isinstance(item, dict)]
+        self.nodes = [
+            item for item in config.get("nodes", []) if isinstance(item, dict)
+        ]
         self.desired: dict[int, dict] = {}
         self.lock = threading.RLock()
         self.auth_servers = []
@@ -152,6 +159,7 @@ class Agent:
         yaml_available = False
         try:
             import yaml  # type: ignore
+
             yaml_available = bool(yaml)
         except Exception:
             pass
@@ -163,14 +171,30 @@ class Agent:
             "hysteria_yaml_adapter": yaml_available,
             "sing_box_binary": bool(shutil.which(sing_box)),
             "vless_v2ray_api": "with_v2ray_api" in sing_version,
-            "hysteria_config": bool(self._config_path(spec, "hysteria_config", [
-                "/etc/hysteria*/config.yaml",
-            ])),
-            "sing_box_config": bool(self._config_path(spec, "sing_box_config", [
-                "/etc/sing-box*/config.json",
-            ])),
+            "hysteria_config": bool(
+                self._config_path(
+                    spec,
+                    "hysteria_config",
+                    [
+                        "/etc/hysteria*/config.yaml",
+                    ],
+                )
+            ),
+            "sing_box_config": bool(
+                self._config_path(
+                    spec,
+                    "sing_box_config",
+                    [
+                        "/etc/sing-box*/config.json",
+                    ],
+                )
+            ),
             "vless_stats_helper": os.path.exists(
-                str(spec.get("vless_stats_binary", "/usr/local/libexec/sub-app-vless-stats"))
+                str(
+                    spec.get(
+                        "vless_stats_binary", "/usr/local/libexec/sub-app-vless-stats"
+                    )
+                )
             ),
             # True when this node's Hysteria2 is an inbound inside sing-box
             # rather than a standalone hysteria server.
@@ -189,7 +213,9 @@ class Agent:
         if payload is not None:
             data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
             headers["Content-Type"] = "application/json"
-        request = Request(self.endpoint + path, data=data, headers=headers, method=method)
+        request = Request(
+            self.endpoint + path, data=data, headers=headers, method=method
+        )
         with urlopen(request, timeout=12) as response:
             return json.loads(response.read(1024 * 1024).decode("utf-8"))
 
@@ -243,7 +269,9 @@ class Agent:
     def _backup_and_replace(self, path: Path, content: str, spec: dict) -> Path:
         backup_dir = Path(spec.get("backup_dir", "/var/lib/sub-app-node-agent/backups"))
         backup_dir.mkdir(parents=True, exist_ok=True)
-        backup = backup_dir / (path.name + "." + utcnow().strftime("%Y%m%dT%H%M%SZ") + ".bak")
+        backup = backup_dir / (
+            path.name + "." + utcnow().strftime("%Y%m%dT%H%M%SZ") + ".bak"
+        )
         shutil.copy2(path, backup)
         info = path.stat()
         mode = stat.S_IMODE(info.st_mode)
@@ -279,7 +307,9 @@ class Agent:
             import yaml  # type: ignore
         except Exception as exc:
             raise RuntimeError("PyYAML unavailable") from exc
-        path = self._config_path(spec, "hysteria_config", ["/etc/hysteria*/config.yaml"])
+        path = self._config_path(
+            spec, "hysteria_config", ["/etc/hysteria*/config.yaml"]
+        )
         if path is None:
             raise RuntimeError("Hysteria config not found")
         config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -290,9 +320,11 @@ class Agent:
             if old_auth.get("type") == "password" and old_auth.get("password"):
                 state["legacy_auth"] = [str(old_auth["password"])]
             elif old_auth.get("type") == "userpass":
-                state["legacy_auth"] = [f"{u}:{p}" for u, p in (old_auth.get("userpass") or {}).items()]
+                state["legacy_auth"] = [
+                    f"{u}:{p}" for u, p in (old_auth.get("userpass") or {}).items()
+                ]
         if not state.get("legacy_until") and state.get("legacy_auth"):
-            state["legacy_until"] = (utcnow().timestamp() + 24 * 3600)
+            state["legacy_until"] = utcnow().timestamp() + 24 * 3600
             state["legacy_until"] = datetime.fromtimestamp(
                 state["legacy_until"], timezone.utc
             ).isoformat()
@@ -300,11 +332,16 @@ class Agent:
         stats_port = int(spec.get("stats_port", 0) or 0)
         if not auth_port or not stats_port:
             raise RuntimeError("HY2 auth/stats ports missing")
-        config["auth"] = {"type": "http", "http": {"url": f"http://127.0.0.1:{auth_port}/auth"}}
+        config["auth"] = {
+            "type": "http",
+            "http": {"url": f"http://127.0.0.1:{auth_port}/auth"},
+        }
         traffic = config.get("trafficStats") or {}
         traffic["listen"] = f"127.0.0.1:{stats_port}"
         if not traffic.get("secret"):
-            traffic["secret"] = state.setdefault("traffic_secret", secrets.token_urlsafe(32))
+            traffic["secret"] = state.setdefault(
+                "traffic_secret", secrets.token_urlsafe(32)
+            )
         else:
             state["traffic_secret"] = str(traffic["secret"])
         config["trafficStats"] = traffic
@@ -359,15 +396,23 @@ class Agent:
         binary = str(spec.get("sing_box_binary", "sing-box"))
         if "with_v2ray_api" not in command_output([binary, "version"]):
             raise RuntimeError("sing-box lacks with_v2ray_api")
-        path = self._config_path(spec, "sing_box_config", ["/etc/sing-box*/config.json"])
+        path = self._config_path(
+            spec, "sing_box_config", ["/etc/sing-box*/config.json"]
+        )
         if path is None:
             raise RuntimeError("sing-box config not found")
         config = json.loads(path.read_text(encoding="utf-8"))
         wanted_tag = spec.get("inbound_tag")
         inbound = next(
-            (item for item in config.get("inbounds", [])
-             if (item.get("tag") == wanted_tag if wanted_tag
-                 else item.get("type") == "hysteria2")),
+            (
+                item
+                for item in config.get("inbounds", [])
+                if (
+                    item.get("tag") == wanted_tag
+                    if wanted_tag
+                    else item.get("type") == "hysteria2"
+                )
+            ),
             None,
         )
         if not inbound:
@@ -380,15 +425,19 @@ class Agent:
                 utcnow().timestamp() + 24 * 3600, timezone.utc
             ).isoformat()
         users = []
-        if state.get("legacy_until") and utcnow() < datetime.fromisoformat(state["legacy_until"]):
+        if state.get("legacy_until") and utcnow() < datetime.fromisoformat(
+            state["legacy_until"]
+        ):
             users.extend(state.get("legacy_users", []))
         for item in desired.get("users", []):
             # Subscriptions render hysteria2://user:pass@host and clients send
             # that whole userinfo as the auth string, so store it intact.
-            users.append({
-                "name": item["stats_id"],
-                "password": f"{item.get('username', '')}:{item.get('password', '')}",
-            })
+            users.append(
+                {
+                    "name": item["stats_id"],
+                    "password": f"{item.get('username', '')}:{item.get('password', '')}",
+                }
+            )
         if not users:
             raise RuntimeError("hysteria2 users empty")
         inbound["users"] = users
@@ -400,7 +449,9 @@ class Agent:
         backup = self._backup_and_replace(path, content, spec)
         check = subprocess.run(
             [binary, "check", "-c", str(path)],
-            capture_output=True, timeout=20, check=False,
+            capture_output=True,
+            timeout=20,
+            check=False,
         )
         if check.returncode or not self._service_restart(spec):
             self._restore(path, backup, spec)
@@ -417,7 +468,11 @@ class Agent:
         then rejected every client with "flow mismatch: expected none".
         """
         flow = next(
-            (item.get("flow") for item in state.get("legacy_users", []) if item.get("flow")),
+            (
+                item.get("flow")
+                for item in state.get("legacy_users", [])
+                if item.get("flow")
+            ),
             "",
         )
         # Last resort if the state file was ever lost: the snapshot would be
@@ -430,13 +485,19 @@ class Agent:
         version = command_output([binary, "version"])
         if "with_v2ray_api" not in version:
             raise RuntimeError("sing-box lacks with_v2ray_api")
-        path = self._config_path(spec, "sing_box_config", ["/etc/sing-box*/config.json"])
+        path = self._config_path(
+            spec, "sing_box_config", ["/etc/sing-box*/config.json"]
+        )
         if path is None:
             raise RuntimeError("sing-box config not found")
         config = json.loads(path.read_text(encoding="utf-8"))
         inbound = next(
-            (item for item in config.get("inbounds", [])
-             if item.get("type") == "vless" or item.get("tag") == spec.get("inbound_tag")),
+            (
+                item
+                for item in config.get("inbounds", [])
+                if item.get("type") == "vless"
+                or item.get("tag") == spec.get("inbound_tag")
+            ),
             None,
         )
         if not inbound:
@@ -445,12 +506,14 @@ class Agent:
         state = self.node_state(node_id)
         if "legacy_users" not in state:
             state["legacy_users"] = copy.deepcopy(inbound.get("users", []))
-            state["legacy_until"] = (utcnow().timestamp() + 24 * 3600)
+            state["legacy_until"] = utcnow().timestamp() + 24 * 3600
             state["legacy_until"] = datetime.fromtimestamp(
                 state["legacy_until"], timezone.utc
             ).isoformat()
         users = []
-        if state.get("legacy_until") and utcnow() < datetime.fromisoformat(state["legacy_until"]):
+        if state.get("legacy_until") and utcnow() < datetime.fromisoformat(
+            state["legacy_until"]
+        ):
             users.extend(state.get("legacy_users", []))
         flow = self._vless_flow(state, spec)
         for item in desired.get("users", []):
@@ -471,8 +534,10 @@ class Agent:
         backup = self._backup_and_replace(path, content, spec)
         check = subprocess.run(
             [binary, "check", "-c", str(path)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=20, check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+            check=False,
         )
         if check.returncode or not self._service_restart(spec):
             self._restore(path, backup, spec)
@@ -487,7 +552,9 @@ class Agent:
         value, and key each sample on the absolute reading so the center can
         deduplicate retries.
         """
-        binary = str(spec.get("vless_stats_binary", "/usr/local/libexec/sub-app-vless-stats"))
+        binary = str(
+            spec.get("vless_stats_binary", "/usr/local/libexec/sub-app-vless-stats")
+        )
         if not os.path.exists(binary):
             return []
         listen = str(spec.get("v2ray_api_listen", "127.0.0.1:10085"))
@@ -516,7 +583,9 @@ class Agent:
                 value = int(item.get("value", 0) or 0)
             except (TypeError, ValueError):
                 continue
-            totals.setdefault(name, {"uplink": 0, "downlink": 0})[direction] = max(0, value)
+            totals.setdefault(name, {"uplink": 0, "downlink": 0})[direction] = max(
+                0, value
+            )
 
         traffic = []
         for key, value in totals.items():
@@ -527,17 +596,19 @@ class Agent:
             delta_tx = tx - old_tx if tx >= old_tx else 0
             counters[key] = {"rx": rx, "tx": tx}
             if delta_rx or delta_tx:
-                traffic.append({
-                    # A Hysteria2 inbound hosted by sing-box reports through
-                    # the same API, so label the sample with the node's own
-                    # protocol rather than assuming VLESS.
-                    "source": str(spec.get("protocol", "vless")),
-                    "credential_key": key,
-                    "bytes_in": delta_rx,
-                    "bytes_out": delta_tx,
-                    "bucket": iso_bucket(),
-                    "sample_key": f"{node_id}:{key}:{rx}:{tx}",
-                })
+                traffic.append(
+                    {
+                        # A Hysteria2 inbound hosted by sing-box reports through
+                        # the same API, so label the sample with the node's own
+                        # protocol rather than assuming VLESS.
+                        "source": str(spec.get("protocol", "vless")),
+                        "credential_key": key,
+                        "bytes_in": delta_rx,
+                        "bytes_out": delta_tx,
+                        "bucket": iso_bucket(),
+                        "sample_key": f"{node_id}:{key}:{rx}:{tx}",
+                    }
+                )
         return traffic
 
     def collect_traffic(self, spec: dict) -> list[dict]:
@@ -572,21 +643,25 @@ class Agent:
             delta_tx = tx - old_tx if tx >= old_tx else 0
             counters[key] = {"rx": rx, "tx": tx}
             if delta_rx or delta_tx:
-                traffic.append({
-                    "source": "hysteria2",
-                    "credential_key": key,
-                    "bytes_in": delta_rx,
-                    "bytes_out": delta_tx,
-                    "bucket": iso_bucket(),
-                    "sample_key": f"{node_id}:{key}:{rx}:{tx}",
-                })
+                traffic.append(
+                    {
+                        "source": "hysteria2",
+                        "credential_key": key,
+                        "bytes_in": delta_rx,
+                        "bytes_out": delta_tx,
+                        "bucket": iso_bucket(),
+                        "sample_key": f"{node_id}:{key}:{rx}:{tx}",
+                    }
+                )
         return traffic
 
     def poll_node(self, spec: dict):
         node_id = int(spec["node_id"])
         token = str(spec.get("token", ""))
         try:
-            desired = self.request_json("GET", f"/api/agent/v1/desired/{node_id}", token)
+            desired = self.request_json(
+                "GET", f"/api/agent/v1/desired/{node_id}", token
+            )
             with self.lock:
                 self.desired[node_id] = desired
             status = "observe"
@@ -607,7 +682,9 @@ class Agent:
                 applied = desired.get("generation", "")
             traffic = self.collect_traffic(spec)
             self.request_json(
-                "POST", f"/api/agent/v1/heartbeat/{node_id}", token,
+                "POST",
+                f"/api/agent/v1/heartbeat/{node_id}",
+                token,
                 {
                     "status": status,
                     "agent_version": VERSION,
@@ -620,7 +697,9 @@ class Agent:
             error = type(exc).__name__
             try:
                 self.request_json(
-                    "POST", f"/api/agent/v1/heartbeat/{node_id}", token,
+                    "POST",
+                    f"/api/agent/v1/heartbeat/{node_id}",
+                    token,
                     {
                         "status": "error",
                         "agent_version": VERSION,
@@ -648,7 +727,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="/etc/sub-app/node-agent.json")
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
     config = read_json(Path(args.config), {})
     if not config.get("endpoint") or not config.get("nodes"):
         raise SystemExit("invalid node agent config")

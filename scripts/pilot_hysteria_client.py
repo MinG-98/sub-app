@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import os
-import sys
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -23,7 +23,12 @@ for line in (ROOT / ".env").read_text(encoding="utf-8").splitlines():
         os.environ[key] = value.strip().strip("'\"")
 
 from app.credentials import credential_values  # noqa: E402
-from app.models import Friend, Node, UserNodeCredential, make_session_factory  # noqa: E402
+from app.models import (  # noqa: E402
+    Friend,
+    Node,
+    UserNodeCredential,
+    make_session_factory,
+)
 
 
 def main():
@@ -74,7 +79,10 @@ def main():
                     "",
                 )
             )
-            client_config = {"server": server, "socks5": {"listen": f"127.0.0.1:{pilot_port}"}}
+            client_config = {
+                "server": server,
+                "socks5": {"listen": f"127.0.0.1:{pilot_port}"},
+            }
     finally:
         db.close()
 
@@ -118,28 +126,63 @@ def main():
             safe_words = {
                 word
                 for word in log_text.replace(":", " ").replace("/", " ").split()
-                if word in {
-                    "fatal", "failed", "invalid", "unsupported", "parse", "listen",
-                    "server", "address", "mode", "config", "configuration", "url",
-                    "host", "port", "missing", "required", "socks5", "auth", "obfs",
-                    "tls", "yaml", "field", "unknown", "must", "be", "a",
+                if word
+                in {
+                    "fatal",
+                    "failed",
+                    "invalid",
+                    "unsupported",
+                    "parse",
+                    "listen",
+                    "server",
+                    "address",
+                    "mode",
+                    "config",
+                    "configuration",
+                    "url",
+                    "host",
+                    "port",
+                    "missing",
+                    "required",
+                    "socks5",
+                    "auth",
+                    "obfs",
+                    "tls",
+                    "yaml",
+                    "field",
+                    "unknown",
+                    "must",
+                    "be",
+                    "a",
                 }
             }
             print(
                 "hysteria_client_process_failed",
-                "log_lines", len(log_text.splitlines()),
-                "auth_word", "auth" in log_text,
-                "yaml_word", "yaml" in log_text,
-                "certificate_word", "certificate" in log_text,
-                "unknown_field", "unknown field" in log_text,
-                "tokens", tokens,
-                "safe_words", sorted(safe_words),
+                "log_lines",
+                len(log_text.splitlines()),
+                "auth_word",
+                "auth" in log_text,
+                "yaml_word",
+                "yaml" in log_text,
+                "certificate_word",
+                "certificate" in log_text,
+                "unknown_field",
+                "unknown field" in log_text,
+                "tokens",
+                tokens,
+                "safe_words",
+                sorted(safe_words),
             )
             return 1
         response = subprocess.run(
             [
-                "curl", "-fsS", "--socks5-hostname", f"127.0.0.1:{pilot_port}",
-                "--max-time", "12", os.environ.get("HY2_PILOT_URL", "https://sub.m1n6.uk/"),
+                "curl",
+                "-fsS",
+                "--socks5-hostname",
+                f"127.0.0.1:{pilot_port}",
+                "--max-time",
+                "12",
+                os.environ.get("HY2_PILOT_URL", "https://sub.m1n6.uk/"),
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -166,7 +209,14 @@ def main():
         }.items():
             if any(token in log_text for token in tokens):
                 classes.append(label)
-        print("hysteria_external_handshake_ok", response.returncode == 0, "log_flags", flags, "classes", classes)
+        print(
+            "hysteria_external_handshake_ok",
+            response.returncode == 0,
+            "log_flags",
+            flags,
+            "classes",
+            classes,
+        )
         return 0 if response.returncode == 0 else 1
     finally:
         process.terminate()
