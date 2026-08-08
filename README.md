@@ -26,6 +26,42 @@
 - 仪表盘桌面端使用横向流量/活跃度柱状图；拓扑中的用户名在图外显示并稳定分色。`mobile-enhancements` 资源负责跨视口的品牌标记和紧凑布局。
 - `/healthz` 返回带时间戳的健康状态，并汇总数据库、哪吒采集、代理采集、协调器和 Agent 状态。
 
+## 运维脚本与定时任务
+
+仪表盘和健康检查展示的采集/协调状态并非由应用自动刷新，而是由以下独立脚本写入 `/var/lib/sub-app/*.json` 状态文件，需要通过 cron 或 systemd timer 周期执行：
+
+| 脚本 | 作用 | 关键环境变量（均有默认值，可省略） |
+| --- | --- | --- |
+| `scripts/nezha_collector.py` | 单次采集哪吒整机状态与流量 | `NEZHA_BASE_URL`、`NEZHA_API_TOKEN`（或写入 `NEZHA_ENV_FILE` 指向的文件，默认为 `/etc/sub-app/nezha.env`） |
+| `scripts/proxy_collector.py` | 单次采集 Hysteria2/VLESS 用户级流量计数器 | `SUB_APP_VLESS_STATS_BINARY`（默认 `/usr/local/libexec/sub-app-vless-stats`）、`SUB_APP_PROXY_STATUS` |
+| `scripts/reconciler.py` | 将用户分配与本机代理适配器配置做最终一致性协调（新增/轮换/吊销凭据的重试循环） | `SUB_APP_PROXY_ADAPTERS_ENV`（默认 `/etc/sub-app/proxy-adapters.env`）、`SUB_APP_RECONCILER_STATUS` |
+| `scripts/latency_probe.py` | 触发一次真实延迟探测（控制面/节点入口/代理出口） | `SUB_APP_LATENCY_STATUS`、`SUB_APP_LATENCY_LOCK`、`SUB_APP_HYSTERIA_BIN`、`SUB_APP_SING_BOX_PROBE_BIN` |
+
+延迟探测通常由仪表盘按需触发（`POST /api/admin/latency/probe`），无需单独定时；其余三个脚本建议用 systemd timer 定期执行，例如：
+
+```ini
+# /etc/systemd/system/sub-app-nezha-collector.service
+[Service]
+Type=oneshot
+User=sub-app
+EnvironmentFile=/etc/sub-app/app.env
+ExecStart=/opt/sub-app/.venv/bin/python /opt/sub-app/scripts/nezha_collector.py
+
+# /etc/systemd/system/sub-app-nezha-collector.timer
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+```
+
+`proxy_collector.py` 和 `reconciler.py` 可按相同方式配置各自的 `.service`/`.timer`，运行间隔按节点数量和流量精度需求调整。
+
+`scripts/pilot_hysteria_client.py` 与 `scripts/pilot_vless_client.py` 是一次性人工诊断脚本，用于在排查某个节点握手问题时手动运行，不应加入定时任务。
+
+节点 Agent（`agent/` 目录，独立于以上中心侧脚本）的部署方式见 [agent/README.md](agent/README.md)。
+
 ## 支持的订阅格式
 
 订阅接口由 `target` 参数选择输出格式：
