@@ -29,7 +29,7 @@ be deployed and watched before it is allowed to touch any config.
 | --- | --- | --- |
 | Standalone Hysteria2 | Agent serves a loopback HTTP auth backend | Agent is in the auth path — supervise it |
 | Hysteria2 as a sing-box inbound | sing-box validates in-process | Agent not in the auth path |
-| VLESS Reality (sing-box) | sing-box validates in-process | Needs `with_v2ray_api` build |
+| VLESS Reality (sing-box) | sing-box validates in-process | Needs `with_v2ray_api` build — see [BUILD.md](BUILD.md) |
 
 Prefer folding Hysteria2 into sing-box where possible: a dead agent then costs
 traffic accounting, not connectivity.
@@ -43,10 +43,9 @@ and prints JSON.  **The API must stay on 127.0.0.1** — it is unauthenticated.
 sing-box registers the stats service under the upstream V2Ray name on some
 builds and under its own package name on others, so the helper tries both.
 
-Build (static, so one binary works on glibc and musl alike):
-
-    CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -buildid=' \
-        -o sub-app-vless-stats ./vless-stats.go
+Build instructions for the helper, and for a sing-box that actually exposes that
+API, are in [BUILD.md](BUILD.md) — stock sing-box releases omit
+`with_v2ray_api`, so counters are unavailable without a rebuild.
 
 ## Constraints learned the hard way
 
