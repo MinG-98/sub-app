@@ -46,6 +46,8 @@ REMOTE_AGENT_NODES = {
     14: {"protocol": "vless", "source": "vless", "label": "VLESS 节点 Agent"},
     15: {"protocol": "vless", "source": "vless", "label": "VLESS 节点 Agent"},
     16: {"protocol": "vless", "source": "vless", "label": "VLESS 节点 Agent"},
+    17: {"protocol": "vless", "source": "vless", "label": "VLESS 节点 Agent"},
+    18: {"protocol": "hysteria2", "source": "hysteria2", "label": "Hysteria2 节点 Agent"},
 }
 
 SUPPORTED_NODES = {

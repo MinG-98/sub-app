@@ -40,6 +40,7 @@ from app.models import (
     Friend,
     FlowRecord,
     Node,
+    NodeAgent,
     NodeMetricSample,
     UserNodeCredential,
     make_session_factory,
@@ -52,6 +53,7 @@ from app.traffic import (
     fetch_servers,
     is_collector_configured,
 )
+from app.latency import read_status, start_probe
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = os.environ.get("SUB_APP_DB", str(BASE_DIR / "data.db"))
@@ -414,6 +416,146 @@ def node_traffic(
     }
 
 
+def _topology_agent_state(agent):
+    if agent is None:
+        return {
+            "configured": False,
+            "status": "unconfigured",
+            "online": False,
+            "last_seen": None,
+        }
+    last_seen = agent.last_seen
+    if last_seen is not None and last_seen.tzinfo is None:
+        last_seen = last_seen.replace(tzinfo=timezone.utc)
+    online = bool(
+        last_seen is not None
+        and (utcnow() - last_seen).total_seconds() <= 180
+    )
+    return {
+        "configured": True,
+        "status": agent.status,
+        "online": online,
+        "last_seen": _iso(agent.last_seen),
+    }
+
+
+def _topology_node_is_real(node: Node, parsed: dict) -> bool:
+    """Keep placeholders out of the management graph without guessing routes."""
+    if (node.name or "").startswith("⚠️"):
+        return False
+    host = parsed.get("host") or node.server or ""
+    port = int(parsed.get("port") or 0)
+    if node.protocol.lower() == "vless" and host == "127.0.0.1":
+        return not (port <= 3 or port >= 40000)
+    return True
+
+
+@app.get("/api/admin/overview/topology")
+def overview_topology(db=Depends(get_db), _=Depends(require_admin)):
+    """Build the management graph from current allocations and node endpoints."""
+    friends = db.scalars(select(Friend).order_by(Friend.id)).all()
+    nodes = db.scalars(select(Node).order_by(Node.sort_order, Node.id)).all()
+    allocations = db.execute(
+        select(Allocation.friend_id, Allocation.node_id)
+        .order_by(Allocation.friend_id, Allocation.node_id)
+    ).all()
+    agents = {
+        agent.node_id: agent
+        for agent in db.scalars(select(NodeAgent)).all()
+    }
+    by_friend = {}
+    for friend_id, node_id in allocations:
+        by_friend.setdefault(friend_id, []).append(node_id)
+    nodes_by_id = {node.id: node for node in nodes}
+    graph_nodes = {}
+    edges = []
+    seen_relations = set()
+
+    for friend in friends:
+        friend_name = f"用户/{friend.uid}"
+        graph_nodes.setdefault(
+            friend_name,
+            {
+                "name": friend_name,
+                "type": "user",
+                "friend_id": friend.id,
+                "enabled": bool(friend.enabled),
+                "node_count": 0,
+            },
+        )
+        for node_id in by_friend.get(friend.id, []):
+            node = nodes_by_id.get(node_id)
+            if node is None:
+                continue
+            parsed = parse_uri(node.uri) or {}
+            if not _topology_node_is_real(node, parsed):
+                continue
+            node_name = f"节点/{node.name}"
+            host = parsed.get("host") or node.server or "未知"
+            server_name = f"服务器/{host}"
+            agent_state = _topology_agent_state(agents.get(node.id))
+            graph_nodes.setdefault(
+                node_name,
+                {
+                    "name": node_name,
+                    "type": "node",
+                    "node_id": node.id,
+                    "protocol": node.protocol,
+                    "enabled": bool(node.enabled),
+                    "agent": agent_state,
+                },
+            )
+            graph_nodes.setdefault(
+                server_name,
+                {
+                    "name": server_name,
+                    "type": "server",
+                    "server": host,
+                    "node_ids": [],
+                },
+            )
+            graph_nodes[friend_name]["node_count"] += 1
+            graph_nodes[server_name]["node_ids"].append(node.id)
+            relation = (friend_name, node_name)
+            if relation not in seen_relations:
+                edges.append(
+                    {
+                        "source": friend_name,
+                        "target": node_name,
+                        "value": 1,
+                        "kind": "allocation",
+                        "active": bool(friend.enabled and node.enabled),
+                    }
+                )
+                seen_relations.add(relation)
+            relation = (node_name, server_name)
+            if relation not in seen_relations:
+                edges.append(
+                    {
+                        "source": node_name,
+                        "target": server_name,
+                        "value": 1,
+                        "kind": "endpoint",
+                        "active": bool(node.enabled),
+                    }
+                )
+                seen_relations.add(relation)
+
+    return {
+        "mode": "management",
+        "source": "database_allocations",
+        "generated_at": _iso(utcnow()),
+        "summary": {
+            "users": sum(1 for item in graph_nodes.values() if item["type"] == "user"),
+            "nodes": sum(1 for item in graph_nodes.values() if item["type"] == "node"),
+            "servers": sum(1 for item in graph_nodes.values() if item["type"] == "server"),
+            "relations": sum(1 for edge in edges if edge["kind"] == "allocation"),
+        },
+        "nodes": list(graph_nodes.values()),
+        "edges": edges,
+    }
+
+
 def _collector_status(db):
     proxy_status_path = Path(
         os.environ.get(
@@ -480,6 +622,18 @@ def _collector_status(db):
 @app.get("/api/admin/collector/status")
 def collector_status(db=Depends(get_db), _=Depends(require_admin)):
     return _collector_status(db)
+
+
+@app.get("/api/admin/latency")
+def latency_status(_=Depends(require_admin)):
+    """Return the last real node-entry/proxy-exit probe without secrets."""
+    return read_status()
+
+
+@app.post("/api/admin/latency/probe")
+def trigger_latency_probe(_=Depends(require_admin)):
+    """Start a bounded background probe; repeated clicks are coalesced."""
+    return start_probe()
 
 
 @app.get("/api/admin/collector/servers")
@@ -1271,6 +1425,7 @@ def healthz():
         collector_state = _collector_status(db)
         return {
             "ok": True,
+            "generated_at": _iso(utcnow()),
             "database": "ok",
             "collector": collector_state,
             "proxy_collector": proxy_status,

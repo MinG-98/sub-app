@@ -10,3 +10,8 @@ data.db
 .DS_Store
 .vscode/
 *.log
+# Runtime databases and SQLite sidecars
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
