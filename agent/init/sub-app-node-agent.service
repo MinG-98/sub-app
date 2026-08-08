@@ -1,0 +1,15 @@
+[Unit]
+Description=Sub App per-server node coordination agent
+After=network-online.target sing-box.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/libexec/sub-app-node-agent.py --config /etc/sub-app/node-agent.json
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/sub-app-node-agent.log
+StandardError=append:/var/log/sub-app-node-agent.err
+
+[Install]
+WantedBy=multi-user.target

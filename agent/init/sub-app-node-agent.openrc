@@ -1,0 +1,23 @@
+#!/sbin/openrc-run
+
+name="sub-app-node-agent"
+description="Sub App per-server node coordination agent"
+
+# Without supervision a crashed agent never returns.  On nodes whose Hysteria2
+# runs as a standalone process the agent also serves the loopback auth backend,
+# so a dead agent rejects every client; everywhere else it leaves credentials
+# stuck in pending at the center and stops traffic collection.
+supervisor="supervise-daemon"
+command="/usr/bin/python3"
+command_args="/usr/local/libexec/sub-app-node-agent.py --config /etc/sub-app/node-agent.json"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/${RC_SVCNAME}.log"
+error_log="/var/log/${RC_SVCNAME}.err"
+respawn_delay=2
+respawn_max=5
+respawn_period=60
+
+depend() {
+    need net
+    after firewall
+}
