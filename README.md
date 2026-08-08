@@ -1,5 +1,7 @@
 # Sub App
 
+[![CI](https://github.com/MinG-98/sub-app/actions/workflows/ci.yml/badge.svg)](https://github.com/MinG-98/sub-app/actions/workflows/ci.yml)
+
 基于 FastAPI + Vue 3 的轻量节点订阅管理系统，用于集中维护代理节点、为不同用户分配节点、采集节点状态与流量，并生成 V2Ray/Clash 兼容的订阅内容。
 
 当前仓库是私有仓库，面向个人部署与运维使用。线上实例地址为 `https://sub.m1n6.uk`。
@@ -98,6 +100,13 @@ WantedBy=timers.target
 ├── static/
 │   ├── index.html     # 管理界面入口
 │   └── assets/        # 前端构建产物
+├── .github/
+│   ├── workflows/ci.yml          # lint、格式检查和测试
+│   └── pull_request_template.md
+├── requirements.txt       # 运行依赖
+├── requirements-dev.txt   # 运行依赖 + ruff/black/pytest
+├── pyproject.toml         # ruff/black 配置
+├── .pre-commit-config.yaml
 ├── .gitignore
 └── README.md
 ```
@@ -133,7 +142,7 @@ cd sub-app
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install fastapi 'uvicorn[standard]' sqlalchemy itsdangerous pyyaml httpx
+python -m pip install -r requirements.txt
 
 export SUB_APP_ADMIN_PASSWORD='change-this-password'
 export SUB_APP_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
@@ -161,6 +170,25 @@ uvicorn app.main:app --host 127.0.0.1 --port 8080
 | `GET /sub/{token}` | 生成订阅内容，使用 `target` 选择格式 |
 
 除健康检查和订阅接口外，管理接口需要登录 Cookie。订阅令牌本身等同于访问凭据，应按密码处理。
+
+## 开发规范
+
+```bash
+python -m pip install -r requirements-dev.txt
+pre-commit install   # 可选：提交前自动跑 ruff/black 和基础检查
+```
+
+- 代码风格由 [black](https://black.readthedocs.io/) 统一格式化，静态检查用 [ruff](https://docs.astral.sh/ruff/)；配置见 `pyproject.toml`。
+- 提交前建议本地跑一遍：
+
+  ```bash
+  ruff check .
+  black --check .
+  pytest agent/tests -q
+  ```
+
+- GitHub Actions（`.github/workflows/ci.yml`）在每次 push/PR 到 `master` 时执行同样的检查，PR 请保持 CI 全绿再合并。
+- PR 请使用 `.github/pull_request_template.md` 中的 Summary/Test plan 结构描述改动。
 
 ## 安全注意事项
 

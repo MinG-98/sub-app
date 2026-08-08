@@ -1,14 +1,14 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
 *.egg-info/
+.ruff_cache/
+.pytest_cache/
 .env
-data.db
-sub_app.db
-*.db
 .DS_Store
 .vscode/
 *.log
