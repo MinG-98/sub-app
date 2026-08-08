@@ -1,0 +1,641 @@
+#!/usr/bin/env python3
+"""One root-only control agent per proxy server.
+
+The agent polls the US control plane for each node hosted on this machine,
+reports capabilities, and stays in observe mode until the node is explicitly
+enabled.  Credentials and legacy authentication values never enter logs.
+"""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import hashlib
+import json
+import logging
+import os
+import re
+import secrets
+import shutil
+import stat
+import subprocess
+import tempfile
+import threading
+import time
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+
+VERSION = "0.3.0"
+
+# "user>>>f3n12v1>>>traffic>>>uplink" as emitted by the V2Ray stats API.
+VLESS_STAT_RE = re.compile(r"^user>>>(.+)>>>traffic>>>(uplink|downlink)$")
+LOG = logging.getLogger("sub-app-node-agent")
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def iso_bucket() -> str:
+    now = utcnow().replace(second=0, microsecond=0)
+    return now.replace(minute=(now.minute // 5) * 5).isoformat()
+
+
+def read_json(path: Path, default):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, ValueError):
+        return copy.deepcopy(default)
+
+
+def write_json(path: Path, value, mode=0o600) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    temp = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, ensure_ascii=True, separators=(",", ":"))
+            handle.write("\n")
+        os.chmod(temp, mode)
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def command_output(argv: list[str], timeout=8) -> str:
+    try:
+        result = subprocess.run(
+            argv, capture_output=True, text=True, timeout=timeout, check=False
+        )
+        return (result.stdout + "\n" + result.stderr)[:4096]
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def command_ok(argv: list[str], timeout=20) -> bool:
+    try:
+        return subprocess.run(
+            argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=timeout, check=False
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+class AuthHandler(BaseHTTPRequestHandler):
+    server_version = "sub-app-node-agent"
+
+    def log_message(self, *_args):
+        return
+
+    def do_POST(self):  # noqa: N802
+        if self.path != "/auth":
+            self.send_error(404)
+            return
+        try:
+            length = min(int(self.headers.get("Content-Length", "0")), 65536)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            auth = str(body.get("auth", ""))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            auth = ""
+        result = self.server.agent.authenticate(self.server.node_id, auth)
+        encoded = json.dumps(result, separators=(",", ":")).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+
+class Agent:
+    def __init__(self, config: dict):
+        self.config = config
+        self.endpoint = str(config.get("endpoint", "")).rstrip("/")
+        self.interval = max(10, int(config.get("poll_seconds", 30)))
+        self.state_path = Path(config.get("state_path", "/var/lib/sub-app-node-agent/state.json"))
+        self.state = read_json(self.state_path, {"nodes": {}})
+        self.state.setdefault("nodes", {})
+        self.nodes = [item for item in config.get("nodes", []) if isinstance(item, dict)]
+        self.desired: dict[int, dict] = {}
+        self.lock = threading.RLock()
+        self.auth_servers = []
+        # Ownership/mode of each managed config, captured before the first
+        # replacement so a rollback can put it back exactly as the proxy core
+        # expects it.
+        self.config_meta: dict[str, tuple[int, int, int]] = {}
+
+    def node_state(self, node_id: int) -> dict:
+        return self.state["nodes"].setdefault(str(node_id), {})
+
+    def save_state(self):
+        write_json(self.state_path, self.state)
+
+    def _config_path(self, spec: dict, key: str, candidates: list[str]) -> Path | None:
+        configured = str(spec.get(key, ""))
+        if configured and Path(configured).is_file():
+            return Path(configured)
+        for pattern in candidates:
+            for path in Path("/").glob(pattern.lstrip("/")):
+                if path.is_file():
+                    return path
+        return None
+
+    def capabilities(self, spec: dict) -> dict:
+        sing_box = str(spec.get("sing_box_binary", "sing-box"))
+        hysteria = str(spec.get("hysteria_binary", "hysteria"))
+        sing_version = command_output([sing_box, "version"])
+        hysteria_present = bool(shutil.which(hysteria))
+        yaml_available = False
+        try:
+            import yaml  # type: ignore
+            yaml_available = bool(yaml)
+        except Exception:
+            pass
+        return {
+            "agent_version": VERSION,
+            "os": os.uname().sysname if hasattr(os, "uname") else "unknown",
+            "machine": os.uname().machine if hasattr(os, "uname") else "unknown",
+            "hysteria_binary": hysteria_present,
+            "hysteria_yaml_adapter": yaml_available,
+            "sing_box_binary": bool(shutil.which(sing_box)),
+            "vless_v2ray_api": "with_v2ray_api" in sing_version,
+            "hysteria_config": bool(self._config_path(spec, "hysteria_config", [
+                "/etc/hysteria*/config.yaml",
+            ])),
+            "sing_box_config": bool(self._config_path(spec, "sing_box_config", [
+                "/etc/sing-box*/config.json",
+            ])),
+            "vless_stats_helper": os.path.exists(
+                str(spec.get("vless_stats_binary", "/usr/local/libexec/sub-app-vless-stats"))
+            ),
+            # True when this node's Hysteria2 is an inbound inside sing-box
+            # rather than a standalone hysteria server.
+            "singbox_engine": self._singbox_engine(spec),
+            "systemd": bool(shutil.which("systemctl")),
+            "openrc": bool(shutil.which("rc-service")),
+        }
+
+    def request_json(self, method: str, path: str, token: str, payload=None):
+        data = None
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": "sub-app-node-agent/" + VERSION,
+            "X-Sub-App-Agent-Token": token,
+        }
+        if payload is not None:
+            data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        request = Request(self.endpoint + path, data=data, headers=headers, method=method)
+        with urlopen(request, timeout=12) as response:
+            return json.loads(response.read(1024 * 1024).decode("utf-8"))
+
+    def authenticate(self, node_id: int, auth: str) -> dict:
+        with self.lock:
+            desired = self.desired.get(node_id, {})
+            users = desired.get("users", [])
+            state = self.node_state(node_id)
+            for item in users:
+                if item.get("protocol") != "hysteria2":
+                    continue
+                if f"{item.get('username', '')}:{item.get('password', '')}" == auth:
+                    return {"ok": True, "id": item.get("stats_id", "")}
+            legacy_until = state.get("legacy_until", "")
+            if legacy_until and utcnow() < datetime.fromisoformat(legacy_until):
+                if auth in state.get("legacy_auth", []):
+                    return {"ok": True, "id": "legacy-shared"}
+            return {"ok": False}
+
+    def start_auth_server(self, spec: dict):
+        if spec.get("protocol") != "hysteria2":
+            return
+        port = int(spec.get("auth_port", 0) or 0)
+        if not port:
+            return
+        node_id = int(spec["node_id"])
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", port), AuthHandler)
+            server.agent = self
+            server.node_id = node_id
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.auth_servers.append(server)
+        except OSError:
+            LOG.error("auth backend failed to listen for node %s", node_id)
+
+    def _service_restart(self, spec: dict) -> bool:
+        service = str(spec.get("service", ""))
+        if not service:
+            return False
+        if shutil.which("systemctl"):
+            return command_ok(["systemctl", "restart", service]) and command_ok(
+                ["systemctl", "is-active", "--quiet", service]
+            )
+        if shutil.which("rc-service"):
+            return command_ok(["rc-service", service, "restart"]) and command_ok(
+                ["rc-service", service, "status"]
+            )
+        return False
+
+    def _backup_and_replace(self, path: Path, content: str, spec: dict) -> Path:
+        backup_dir = Path(spec.get("backup_dir", "/var/lib/sub-app-node-agent/backups"))
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup = backup_dir / (path.name + "." + utcnow().strftime("%Y%m%dT%H%M%SZ") + ".bak")
+        shutil.copy2(path, backup)
+        info = path.stat()
+        mode = stat.S_IMODE(info.st_mode)
+        self.config_meta.setdefault(str(path), (info.st_uid, info.st_gid, mode))
+        fd, name = tempfile.mkstemp(prefix=".config.", dir=str(path.parent))
+        temp = Path(name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(content)
+            os.chmod(temp, mode)
+            # mkstemp creates the file as root.  Proxy cores that drop
+            # privileges (OpenRC command_user / systemd User=) cannot read
+            # their own config unless ownership survives the replacement.
+            os.chown(temp, info.st_uid, info.st_gid)
+            os.replace(temp, path)
+        finally:
+            temp.unlink(missing_ok=True)
+        return backup
+
+    def _restore(self, path: Path, backup: Path, spec: dict):
+        shutil.copy2(backup, path)
+        # copy2 writes into the existing inode and keeps whatever ownership it
+        # currently has, so reapply the values captured before the first swap.
+        owner = self.config_meta.get(str(path))
+        if owner:
+            uid, gid, mode = owner
+            os.chown(path, uid, gid)
+            os.chmod(path, mode)
+        self._service_restart(spec)
+
+    def apply_hysteria(self, spec: dict, desired: dict) -> None:
+        try:
+            import yaml  # type: ignore
+        except Exception as exc:
+            raise RuntimeError("PyYAML unavailable") from exc
+        path = self._config_path(spec, "hysteria_config", ["/etc/hysteria*/config.yaml"])
+        if path is None:
+            raise RuntimeError("Hysteria config not found")
+        config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        node_id = int(spec["node_id"])
+        state = self.node_state(node_id)
+        old_auth = config.get("auth") or {}
+        if not state.get("legacy_auth") and isinstance(old_auth, dict):
+            if old_auth.get("type") == "password" and old_auth.get("password"):
+                state["legacy_auth"] = [str(old_auth["password"])]
+            elif old_auth.get("type") == "userpass":
+                state["legacy_auth"] = [f"{u}:{p}" for u, p in (old_auth.get("userpass") or {}).items()]
+        if not state.get("legacy_until") and state.get("legacy_auth"):
+            state["legacy_until"] = (utcnow().timestamp() + 24 * 3600)
+            state["legacy_until"] = datetime.fromtimestamp(
+                state["legacy_until"], timezone.utc
+            ).isoformat()
+        auth_port = int(spec.get("auth_port", 0) or 0)
+        stats_port = int(spec.get("stats_port", 0) or 0)
+        if not auth_port or not stats_port:
+            raise RuntimeError("HY2 auth/stats ports missing")
+        config["auth"] = {"type": "http", "http": {"url": f"http://127.0.0.1:{auth_port}/auth"}}
+        traffic = config.get("trafficStats") or {}
+        traffic["listen"] = f"127.0.0.1:{stats_port}"
+        if not traffic.get("secret"):
+            traffic["secret"] = state.setdefault("traffic_secret", secrets.token_urlsafe(32))
+        else:
+            state["traffic_secret"] = str(traffic["secret"])
+        config["trafficStats"] = traffic
+        content = yaml.safe_dump(config, allow_unicode=True, sort_keys=False)
+        # poll_node calls apply on every cycle.  Without this guard the proxy
+        # core would be rewritten and restarted every poll interval, dropping
+        # every live connection on a loop.
+        if path.read_text(encoding="utf-8") == content:
+            self.save_state()
+            return
+        backup = self._backup_and_replace(path, content, spec)
+        if not self._service_restart(spec):
+            self._restore(path, backup, spec)
+            raise RuntimeError("Hysteria service failed after config apply")
+        self.save_state()
+
+    def _singbox_engine(self, spec: dict) -> bool:
+        return str(spec.get("engine", "")).lower() in {"sing-box", "singbox"}
+
+    def _singbox_stats_section(self, config: dict, spec: dict) -> None:
+        """Rebuild the V2Ray API block from every named user in the file.
+
+        Korea and Malaysia run a single sing-box that fronts both a VLESS and
+        a Hysteria2 node.  Each node is applied on its own poll, so the stats
+        block has to be derived from the whole config; deriving it from just
+        the inbound being applied would make the two nodes wipe each other's
+        users and restart the core on every cycle.
+        """
+        tags: list[str] = []
+        names: list[str] = []
+        for inbound in config.get("inbounds", []):
+            named = [u.get("name") for u in inbound.get("users", []) if u.get("name")]
+            if not named:
+                continue
+            tag = inbound.get("tag", "")
+            if tag and tag not in tags:
+                tags.append(tag)
+            names.extend(named)
+        experimental = config.setdefault("experimental", {})
+        experimental["v2ray_api"] = {
+            "listen": str(spec.get("v2ray_api_listen", "127.0.0.1:10085")),
+            "stats": {"enabled": True, "inbounds": tags, "users": names},
+        }
+
+    def apply_singbox_hysteria2(self, spec: dict, desired: dict) -> None:
+        """Per-user auth for a Hysteria2 inbound hosted inside sing-box.
+
+        Unlike a standalone Hysteria server, which delegates to an HTTP auth
+        backend, sing-box matches the client's auth string against each user's
+        `password` field directly.
+        """
+        binary = str(spec.get("sing_box_binary", "sing-box"))
+        if "with_v2ray_api" not in command_output([binary, "version"]):
+            raise RuntimeError("sing-box lacks with_v2ray_api")
+        path = self._config_path(spec, "sing_box_config", ["/etc/sing-box*/config.json"])
+        if path is None:
+            raise RuntimeError("sing-box config not found")
+        config = json.loads(path.read_text(encoding="utf-8"))
+        wanted_tag = spec.get("inbound_tag")
+        inbound = next(
+            (item for item in config.get("inbounds", [])
+             if (item.get("tag") == wanted_tag if wanted_tag
+                 else item.get("type") == "hysteria2")),
+            None,
+        )
+        if not inbound:
+            raise RuntimeError("hysteria2 inbound not found")
+        node_id = int(spec["node_id"])
+        state = self.node_state(node_id)
+        if "legacy_users" not in state:
+            state["legacy_users"] = copy.deepcopy(inbound.get("users", []))
+            state["legacy_until"] = datetime.fromtimestamp(
+                utcnow().timestamp() + 24 * 3600, timezone.utc
+            ).isoformat()
+        users = []
+        if state.get("legacy_until") and utcnow() < datetime.fromisoformat(state["legacy_until"]):
+            users.extend(state.get("legacy_users", []))
+        for item in desired.get("users", []):
+            # Subscriptions render hysteria2://user:pass@host and clients send
+            # that whole userinfo as the auth string, so store it intact.
+            users.append({
+                "name": item["stats_id"],
+                "password": f"{item.get('username', '')}:{item.get('password', '')}",
+            })
+        if not users:
+            raise RuntimeError("hysteria2 users empty")
+        inbound["users"] = users
+        self._singbox_stats_section(config, spec)
+        content = json.dumps(config, ensure_ascii=False, indent=2) + "\n"
+        if path.read_text(encoding="utf-8") == content:
+            self.save_state()
+            return
+        backup = self._backup_and_replace(path, content, spec)
+        check = subprocess.run(
+            [binary, "check", "-c", str(path)],
+            capture_output=True, timeout=20, check=False,
+        )
+        if check.returncode or not self._service_restart(spec):
+            self._restore(path, backup, spec)
+            raise RuntimeError("sing-box service failed after hysteria2 apply")
+        self.save_state()
+
+    def apply_vless(self, spec: dict, desired: dict) -> None:
+        binary = str(spec.get("sing_box_binary", "sing-box"))
+        version = command_output([binary, "version"])
+        if "with_v2ray_api" not in version:
+            raise RuntimeError("sing-box lacks with_v2ray_api")
+        path = self._config_path(spec, "sing_box_config", ["/etc/sing-box*/config.json"])
+        if path is None:
+            raise RuntimeError("sing-box config not found")
+        config = json.loads(path.read_text(encoding="utf-8"))
+        inbound = next(
+            (item for item in config.get("inbounds", [])
+             if item.get("type") == "vless" or item.get("tag") == spec.get("inbound_tag")),
+            None,
+        )
+        if not inbound:
+            raise RuntimeError("VLESS inbound not found")
+        node_id = int(spec["node_id"])
+        state = self.node_state(node_id)
+        if "legacy_users" not in state:
+            state["legacy_users"] = copy.deepcopy(inbound.get("users", []))
+            state["legacy_until"] = (utcnow().timestamp() + 24 * 3600)
+            state["legacy_until"] = datetime.fromtimestamp(
+                state["legacy_until"], timezone.utc
+            ).isoformat()
+        users = []
+        if state.get("legacy_until") and utcnow() < datetime.fromisoformat(state["legacy_until"]):
+            users.extend(state.get("legacy_users", []))
+        flow = next((item.get("flow", "") for item in users if item.get("flow") is not None), "")
+        for item in desired.get("users", []):
+            entry = {"name": item["stats_id"], "uuid": item["uuid"]}
+            if flow:
+                entry["flow"] = flow
+            users.append(entry)
+        if not users:
+            raise RuntimeError("VLESS users empty")
+        inbound["users"] = users
+        self._singbox_stats_section(config, spec)
+        content = json.dumps(config, ensure_ascii=False, indent=2) + "\n"
+        # Same idempotency guard as the Hysteria path: never restart the core
+        # when the rendered config is byte-identical to what is already live.
+        if path.read_text(encoding="utf-8") == content:
+            self.save_state()
+            return
+        backup = self._backup_and_replace(path, content, spec)
+        check = subprocess.run(
+            [binary, "check", "-c", str(path)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=20, check=False,
+        )
+        if check.returncode or not self._service_restart(spec):
+            self._restore(path, backup, spec)
+            raise RuntimeError("sing-box service failed after config apply")
+        self.save_state()
+
+    def collect_vless_traffic(self, spec: dict) -> list[dict]:
+        """Read per-user counters from the loopback V2Ray API via the helper.
+
+        Counter handling mirrors the Hysteria path: report deltas, treat a
+        counter that moved backwards as a restart rather than emitting a huge
+        value, and key each sample on the absolute reading so the center can
+        deduplicate retries.
+        """
+        binary = str(spec.get("vless_stats_binary", "/usr/local/libexec/sub-app-vless-stats"))
+        if not os.path.exists(binary):
+            return []
+        listen = str(spec.get("v2ray_api_listen", "127.0.0.1:10085"))
+        raw = command_output([binary, "-addr", listen], timeout=10)
+        try:
+            payload = json.loads(raw.strip().splitlines()[0]) if raw.strip() else {}
+        except (ValueError, IndexError):
+            return []
+        entries = payload.get("stats")
+        if not isinstance(entries, list):
+            return []
+
+        node_id = int(spec["node_id"])
+        state = self.node_state(node_id)
+        counters = state.setdefault("vless_counters", {})
+        # "user>>>NAME>>>traffic>>>uplink" -> uplink is client-to-server.
+        totals: dict[str, dict[str, int]] = {}
+        for item in entries:
+            if not isinstance(item, dict):
+                continue
+            match = VLESS_STAT_RE.match(str(item.get("name", "")))
+            if not match:
+                continue
+            name, direction = match.group(1), match.group(2)
+            try:
+                value = int(item.get("value", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            totals.setdefault(name, {"uplink": 0, "downlink": 0})[direction] = max(0, value)
+
+        traffic = []
+        for key, value in totals.items():
+            rx, tx = value["uplink"], value["downlink"]
+            previous = counters.get(key, {})
+            old_rx, old_tx = int(previous.get("rx", 0)), int(previous.get("tx", 0))
+            delta_rx = rx - old_rx if rx >= old_rx else 0
+            delta_tx = tx - old_tx if tx >= old_tx else 0
+            counters[key] = {"rx": rx, "tx": tx}
+            if delta_rx or delta_tx:
+                traffic.append({
+                    # A Hysteria2 inbound hosted by sing-box reports through
+                    # the same API, so label the sample with the node's own
+                    # protocol rather than assuming VLESS.
+                    "source": str(spec.get("protocol", "vless")),
+                    "credential_key": key,
+                    "bytes_in": delta_rx,
+                    "bytes_out": delta_tx,
+                    "bucket": iso_bucket(),
+                    "sample_key": f"{node_id}:{key}:{rx}:{tx}",
+                })
+        return traffic
+
+    def collect_traffic(self, spec: dict) -> list[dict]:
+        if spec.get("protocol") == "vless" or self._singbox_engine(spec):
+            return self.collect_vless_traffic(spec)
+        if spec.get("protocol") != "hysteria2":
+            return []
+        node_id = int(spec["node_id"])
+        state = self.node_state(node_id)
+        port = int(spec.get("stats_port", 0) or 0)
+        secret = state.get("traffic_secret", "")
+        if not port or not secret:
+            return []
+        try:
+            req = Request(
+                f"http://127.0.0.1:{port}/traffic",
+                headers={"Authorization": secret, "Accept": "application/json"},
+            )
+            with urlopen(req, timeout=5) as response:
+                data = json.loads(response.read(1024 * 1024).decode("utf-8"))
+        except Exception:
+            return []
+        counters = state.setdefault("counters", {})
+        traffic = []
+        for key, value in data.items() if isinstance(data, dict) else []:
+            if not isinstance(value, dict):
+                continue
+            rx, tx = int(value.get("rx", 0) or 0), int(value.get("tx", 0) or 0)
+            previous = counters.get(key, {})
+            old_rx, old_tx = int(previous.get("rx", 0)), int(previous.get("tx", 0))
+            delta_rx = rx - old_rx if rx >= old_rx else 0
+            delta_tx = tx - old_tx if tx >= old_tx else 0
+            counters[key] = {"rx": rx, "tx": tx}
+            if delta_rx or delta_tx:
+                traffic.append({
+                    "source": "hysteria2",
+                    "credential_key": key,
+                    "bytes_in": delta_rx,
+                    "bytes_out": delta_tx,
+                    "bucket": iso_bucket(),
+                    "sample_key": f"{node_id}:{key}:{rx}:{tx}",
+                })
+        return traffic
+
+    def poll_node(self, spec: dict):
+        node_id = int(spec["node_id"])
+        token = str(spec.get("token", ""))
+        try:
+            desired = self.request_json("GET", f"/api/agent/v1/desired/{node_id}", token)
+            with self.lock:
+                self.desired[node_id] = desired
+            status = "observe"
+            applied = desired.get("generation", "")
+            error = ""
+            if desired.get("apply"):
+                status = "ready"
+                applied = ""
+                protocol = desired.get("protocol")
+                if protocol == "hysteria2" and self._singbox_engine(spec):
+                    self.apply_singbox_hysteria2(spec, desired)
+                elif protocol == "hysteria2":
+                    self.apply_hysteria(spec, desired)
+                elif protocol == "vless":
+                    self.apply_vless(spec, desired)
+                else:
+                    raise RuntimeError("unsupported protocol")
+                applied = desired.get("generation", "")
+            traffic = self.collect_traffic(spec)
+            self.request_json(
+                "POST", f"/api/agent/v1/heartbeat/{node_id}", token,
+                {
+                    "status": status,
+                    "agent_version": VERSION,
+                    "capabilities": self.capabilities(spec),
+                    "applied_generation": applied,
+                    "traffic": traffic,
+                },
+            )
+        except Exception as exc:
+            error = type(exc).__name__
+            try:
+                self.request_json(
+                    "POST", f"/api/agent/v1/heartbeat/{node_id}", token,
+                    {
+                        "status": "error",
+                        "agent_version": VERSION,
+                        "capabilities": self.capabilities(spec),
+                        "applied_generation": "",
+                        "error": error,
+                    },
+                )
+            except Exception:
+                pass
+            LOG.error("node %s poll failed: %s", node_id, error)
+
+    def run(self):
+        for spec in self.nodes:
+            self.start_auth_server(spec)
+        while True:
+            started = time.monotonic()
+            for spec in self.nodes:
+                self.poll_node(spec)
+            self.save_state()
+            time.sleep(max(1, self.interval - (time.monotonic() - started)))
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="/etc/sub-app/node-agent.json")
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    config = read_json(Path(args.config), {})
+    if not config.get("endpoint") or not config.get("nodes"):
+        raise SystemExit("invalid node agent config")
+    Agent(config).run()
+
+
+if __name__ == "__main__":
+    main()
