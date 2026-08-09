@@ -17,3 +17,4 @@ ignore = ["E501"]
 # a path. The agent is a standalone script loaded by path, so its tests import
 # it via importlib rather than as a package.
 testpaths = ["tests", "agent/tests"]
+pythonpath = ["."]
