@@ -1,0 +1,55 @@
+"""Regression test for the Clash/mihomo auth-truncation bug.
+
+Per-user hysteria2/trojan credentials render as `username:password@host`
+(see app/credentials.py `render_credential_uri`). `to_clash_proxy` used to
+emit only `node["user"]` as the password, silently dropping the password
+half whenever a URI carried both — every per-user hysteria2 subscriber's
+Clash config had a truncated auth string while their v2ray/raw config was
+fine, so it hid the moment anyone checked the wrong client.
+"""
+
+import yaml
+
+from app.converter import parse_uri, render, to_clash_proxy
+
+
+def test_hysteria2_per_user_uri_keeps_full_auth():
+    uri = "hysteria2://alice-n4-v1:SuperSecretPass99@node.example.test:8443"
+    node = parse_uri(uri)
+    proxy = to_clash_proxy(node)
+    assert proxy["password"] == "alice-n4-v1:SuperSecretPass99"
+
+
+def test_hysteria2_base_uri_unaffected():
+    uri = "hysteria2://sharedpass@node.example.test:8443"
+    node = parse_uri(uri)
+    proxy = to_clash_proxy(node)
+    assert proxy["password"] == "sharedpass"
+
+
+def test_trojan_user_pass_uri_keeps_full_auth():
+    uri = "trojan://tuser:tpass@node.example.test:443"
+    node = parse_uri(uri)
+    proxy = to_clash_proxy(node)
+    assert proxy["password"] == "tuser:tpass"
+
+
+def test_trojan_base_uri_unaffected():
+    uri = "trojan://onlypass@node.example.test:443"
+    node = parse_uri(uri)
+    proxy = to_clash_proxy(node)
+    assert proxy["password"] == "onlypass"
+
+
+def test_clash_render_end_to_end():
+    uri = "hysteria2://alice-n4-v1:SuperSecretPass99@node.example.test:8443"
+    body, content_type = render([uri], "clash")
+    assert content_type.startswith("text/yaml")
+    proxy = yaml.safe_load(body)["proxies"][0]
+    assert proxy["password"] == "alice-n4-v1:SuperSecretPass99"
+
+
+def test_raw_and_v2ray_pass_uri_through_untouched():
+    uri = "hysteria2://alice-n4-v1:SuperSecretPass99@node.example.test:8443"
+    raw, _ = render([uri], "raw")
+    assert raw.strip() == uri
