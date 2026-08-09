@@ -407,6 +407,24 @@ class Agent:
             raise RuntimeError("sing-box service failed after hysteria2 apply")
         self.save_state()
 
+    def _vless_flow(self, state: dict, spec: dict) -> str:
+        """Resolve the flow value written onto each per-user VLESS entry.
+
+        It has to come from the persisted legacy snapshot, which is captured
+        once and outlives the 24h compatibility window.  Reading it from the
+        windowed user list instead dropped the field from every entry the
+        moment the window closed — a day after the first apply — and sing-box
+        then rejected every client with "flow mismatch: expected none".
+        """
+        flow = next(
+            (item.get("flow") for item in state.get("legacy_users", []) if item.get("flow")),
+            "",
+        )
+        # Last resort if the state file was ever lost: the snapshot would be
+        # retaken from an already-flowless config and the value could not be
+        # recovered from the node itself.
+        return flow or str(spec.get("vless_flow", "") or "")
+
     def apply_vless(self, spec: dict, desired: dict) -> None:
         binary = str(spec.get("sing_box_binary", "sing-box"))
         version = command_output([binary, "version"])
@@ -434,7 +452,7 @@ class Agent:
         users = []
         if state.get("legacy_until") and utcnow() < datetime.fromisoformat(state["legacy_until"]):
             users.extend(state.get("legacy_users", []))
-        flow = next((item.get("flow", "") for item in users if item.get("flow") is not None), "")
+        flow = self._vless_flow(state, spec)
         for item in desired.get("users", []):
             entry = {"name": item["stats_id"], "uuid": item["uuid"]}
             if flow:
