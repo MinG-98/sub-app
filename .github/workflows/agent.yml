@@ -1,0 +1,31 @@
+name: agent
+
+# Scoped to agent/ on purpose: app/ and scripts/ predate these conventions and
+# are running in production, so gating them would block unrelated work.
+on:
+  push:
+    paths: ['agent/**', 'pyproject.toml', '.github/workflows/agent.yml']
+  pull_request:
+    paths: ['agent/**', 'pyproject.toml', '.github/workflows/agent.yml']
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - run: pip install black pytest
+
+      - name: Format
+        run: black --check --diff agent
+
+      # The node agent runs on whatever Python the node ships; a syntax error
+      # reaches production as a service that will not start.
+      - name: Compile
+        run: python -m compileall -q agent
+
+      - name: Test
+        run: pytest agent/tests

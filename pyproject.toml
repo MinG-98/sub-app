@@ -1,0 +1,16 @@
+# Tooling config only — this repo is deployed as plain files, not installed as
+# a package, so there is no [project] table.
+
+[tool.black]
+line-length = 88
+# Only the agent is enforced today.  app/ and scripts/ predate this config and
+# are live in production; reformatting them would produce a repo-wide diff
+# against work in flight for no functional gain.  Widen the include pattern
+# once those directories have been formatted deliberately.
+include = '^/agent/.*\.py$'
+
+[tool.pytest.ini_options]
+testpaths = ["agent/tests"]
+# The agent is a standalone script loaded by path, so tests import it via
+# importlib rather than as a package.
+addopts = "-q"
