@@ -60,6 +60,21 @@ def _parse_vmess(uri):
     }
 
 
+def _combined_auth(node):
+    """Combine a `user:pass@` userinfo into the single token hysteria2/trojan
+    clients expect as their auth/password.
+
+    Per-user credentials render as `username:password@host` (see
+    app/credentials.py `render_credential_uri`), so `node["user"]` alone is
+    only half the value once urlparse splits on the `:`.  A base URI with a
+    single token before `@` is unaffected: p.password is empty and this
+    reduces to node["user"], same as before.
+    """
+    user = node["user"] or ""
+    password = node["password"] or ""
+    return f"{user}:{password}" if user and password else user or password
+
+
 def to_clash_proxy(node):
     """Convert a parsed node into a mihomo/Clash.Meta proxy mapping."""
     s = node["scheme"]
@@ -72,7 +87,7 @@ def to_clash_proxy(node):
             "type": "hysteria2",
             "server": node["host"],
             "port": node["port"],
-            "password": node["user"] or node["password"],
+            "password": _combined_auth(node),
         }
         if p.get("sni"):
             proxy["sni"] = p["sni"]
@@ -120,7 +135,7 @@ def to_clash_proxy(node):
             "type": "trojan",
             "server": node["host"],
             "port": node["port"],
-            "password": node["user"] or node["password"],
+            "password": _combined_auth(node),
             "udp": True,
         }
         if p.get("sni"):
