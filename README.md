@@ -19,14 +19,14 @@
 - 为已适配节点维护用户级凭据状态；首批适配 Hysteria2 和 VLESS，旧凭据支持短暂兼容窗口。
 - 通过独立采集脚本读取代理核心的用户级流量，并将哪吒整机流量与用户配额统计分开。
 - 为设备生成可撤销、可轮换的专属订阅访问标识，同时保留旧版 UA/IP 设备记录用于审计。
-- 使用 SQLite 持久化数据，提供 `/healthz` 健康检查接口。
+- 使用 SQLite 持久化数据；公开 `/healthz` 只提供最小存活状态，详细健康信息通过需要管理员登录的 `/api/admin/healthz` 查看。
 
 ## 观测与拓扑
 
 - `/api/admin/overview/topology` 从当前分配关系生成管理拓扑，保留用户、节点和服务器三层关系。
 - `/api/admin/latency` 与 `/api/admin/latency/probe` 提供受控的真实探测：控制面、节点入口 TCP 和代理出口分别记录；探测临时文件使用 root-only 权限，凭据不会写入状态文件或 API 响应。
 - 仪表盘桌面端使用横向流量/活跃度柱状图；拓扑中的用户名在图外显示并稳定分色。`mobile-enhancements` 资源负责跨视口的品牌标记和紧凑布局。
-- `/healthz` 返回带时间戳的健康状态，并汇总数据库、哪吒采集、代理采集、协调器和 Agent 状态。
+- `/healthz` 只返回 `ok` 和时间戳，避免向未认证访问者暴露数据库、采集器、协调器和 Agent 详情；管理员登录后通过 `/api/admin/healthz` 获取完整状态。
 
 ## 运维脚本与定时任务
 
@@ -159,7 +159,8 @@ uvicorn app.main:app --host 127.0.0.1 --port 8080
 | 接口 | 说明 |
 | --- | --- |
 | `GET /` | 管理后台页面 |
-| `GET /healthz` | 健康检查 |
+| `GET /healthz` | 公开最小存活检查，不返回内部组件详情 |
+| `GET /api/admin/healthz` | 管理员登录后查看数据库、采集器、协调器、Agent 和适配器详情 |
 | `POST /api/admin/login` | 管理员登录 |
 | `/api/admin/nodes` | 节点增删改查 |
 | `/api/admin/nodes/{id}/traffic` | 节点流量曲线和时间范围汇总 |
@@ -169,7 +170,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8080
 | `GET /api/admin/stats` | 统计和最近拉取记录 |
 | `GET /sub/{token}` | 生成订阅内容，使用 `target` 选择格式 |
 
-除健康检查和订阅接口外，管理接口需要登录 Cookie。订阅令牌本身等同于访问凭据，应按密码处理。
+除公开最小存活检查和订阅接口外，管理接口需要登录 Cookie。订阅响应显式设置 `private, no-store`；订阅令牌本身等同于访问凭据，应按密码处理。
 
 ## 开发规范
 
