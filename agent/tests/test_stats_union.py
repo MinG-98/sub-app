@@ -5,7 +5,9 @@ import importlib.util
 import json
 from pathlib import Path
 
-spec = importlib.util.spec_from_file_location("agent", Path(__file__).resolve().parent.parent / "node-agent.py")
+spec = importlib.util.spec_from_file_location(
+    "agent", Path(__file__).resolve().parent.parent / "node-agent.py"
+)
 agent_mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(agent_mod)
 
@@ -13,11 +15,15 @@ agent = agent_mod.Agent.__new__(agent_mod.Agent)
 
 config = {
     "inbounds": [
-        {"tag": "vless-reality", "type": "vless", "users": [
-            {"uuid": "legacy", "flow": "xtls-rprx-vision"},
-            {"name": "f3n5v1", "uuid": "u1", "flow": "xtls-rprx-vision"},
-            {"name": "f4n5v1", "uuid": "u2", "flow": "xtls-rprx-vision"},
-        ]},
+        {
+            "tag": "vless-reality",
+            "type": "vless",
+            "users": [
+                {"uuid": "legacy", "flow": "xtls-rprx-vision"},
+                {"name": "f3n5v1", "uuid": "u1", "flow": "xtls-rprx-vision"},
+                {"name": "f4n5v1", "uuid": "u2", "flow": "xtls-rprx-vision"},
+            ],
+        },
         {"tag": "hy2", "type": "hysteria2", "users": [{"password": "legacy"}]},
     ],
     "experimental": {},
@@ -40,7 +46,12 @@ config["inbounds"][1]["users"] = [
 agent._singbox_stats_section(config, node_spec)
 after_hy2 = json.loads(json.dumps(config["experimental"]["v2ray_api"]))
 print("HY2 apply    ->", after_hy2["stats"])
-assert after_hy2["stats"]["users"] == ["f3n5v1", "f4n5v1", "f3n6v1", "f4n6v1"], "union lost users"
+assert after_hy2["stats"]["users"] == [
+    "f3n5v1",
+    "f4n5v1",
+    "f3n6v1",
+    "f4n6v1",
+], "union lost users"
 assert after_hy2["stats"]["inbounds"] == ["vless-reality", "hy2"]
 
 # A second VLESS apply must not drop the Hysteria2 users, or the two nodes
