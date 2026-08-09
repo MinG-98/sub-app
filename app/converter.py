@@ -172,7 +172,10 @@ def render(uris, target):
         body = "\n".join(uris)
         if target == "raw":
             return body, "text/plain; charset=utf-8"
-        return base64.b64encode(body.encode("utf-8")).decode(), "text/plain; charset=utf-8"
+        return (
+            base64.b64encode(body.encode("utf-8")).decode(),
+            "text/plain; charset=utf-8",
+        )
 
     if target in ("clash", "clashmeta", "mihomo"):
         proxies = []
@@ -188,7 +191,11 @@ def render(uris, target):
         config = {
             "proxies": proxies,
             "proxy-groups": [
-                {"name": "🚀 节点选择", "type": "select", "proxies": ["♻️ 自动选择"] + names},
+                {
+                    "name": "🚀 节点选择",
+                    "type": "select",
+                    "proxies": ["♻️ 自动选择"] + names,
+                },
                 {
                     "name": "♻️ 自动选择",
                     "type": "url-test",

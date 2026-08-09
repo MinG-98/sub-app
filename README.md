@@ -1,5 +1,7 @@
 # Sub App
 
+[![CI](https://github.com/MinG-98/sub-app/actions/workflows/ci.yml/badge.svg)](https://github.com/MinG-98/sub-app/actions/workflows/ci.yml)
+
 基于 FastAPI + Vue 3 的轻量节点订阅管理系统，用于集中维护代理节点、为不同用户分配节点、采集节点状态与流量，并生成 V2Ray/Clash 兼容的订阅内容。
 
 当前仓库是私有仓库，面向个人部署与运维使用。线上实例地址为 `https://sub.m1n6.uk`。
@@ -25,6 +27,42 @@
 - `/api/admin/latency` 与 `/api/admin/latency/probe` 提供受控的真实探测：控制面、节点入口 TCP 和代理出口分别记录；探测临时文件使用 root-only 权限，凭据不会写入状态文件或 API 响应。
 - 仪表盘桌面端使用横向流量/活跃度柱状图；拓扑中的用户名在图外显示并稳定分色。`mobile-enhancements` 资源负责跨视口的品牌标记和紧凑布局。
 - `/healthz` 返回带时间戳的健康状态，并汇总数据库、哪吒采集、代理采集、协调器和 Agent 状态。
+
+## 运维脚本与定时任务
+
+仪表盘和健康检查展示的采集/协调状态并非由应用自动刷新，而是由以下独立脚本写入 `/var/lib/sub-app/*.json` 状态文件，需要通过 cron 或 systemd timer 周期执行：
+
+| 脚本 | 作用 | 关键环境变量（均有默认值，可省略） |
+| --- | --- | --- |
+| `scripts/nezha_collector.py` | 单次采集哪吒整机状态与流量 | `NEZHA_BASE_URL`、`NEZHA_API_TOKEN`（或写入 `NEZHA_ENV_FILE` 指向的文件，默认为 `/etc/sub-app/nezha.env`） |
+| `scripts/proxy_collector.py` | 单次采集 Hysteria2/VLESS 用户级流量计数器 | `SUB_APP_VLESS_STATS_BINARY`（默认 `/usr/local/libexec/sub-app-vless-stats`）、`SUB_APP_PROXY_STATUS` |
+| `scripts/reconciler.py` | 将用户分配与本机代理适配器配置做最终一致性协调（新增/轮换/吊销凭据的重试循环） | `SUB_APP_PROXY_ADAPTERS_ENV`（默认 `/etc/sub-app/proxy-adapters.env`）、`SUB_APP_RECONCILER_STATUS` |
+| `scripts/latency_probe.py` | 触发一次真实延迟探测（控制面/节点入口/代理出口） | `SUB_APP_LATENCY_STATUS`、`SUB_APP_LATENCY_LOCK`、`SUB_APP_HYSTERIA_BIN`、`SUB_APP_SING_BOX_PROBE_BIN` |
+
+延迟探测通常由仪表盘按需触发（`POST /api/admin/latency/probe`），无需单独定时；其余三个脚本建议用 systemd timer 定期执行，例如：
+
+```ini
+# /etc/systemd/system/sub-app-nezha-collector.service
+[Service]
+Type=oneshot
+User=sub-app
+EnvironmentFile=/etc/sub-app/app.env
+ExecStart=/opt/sub-app/.venv/bin/python /opt/sub-app/scripts/nezha_collector.py
+
+# /etc/systemd/system/sub-app-nezha-collector.timer
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+```
+
+`proxy_collector.py` 和 `reconciler.py` 可按相同方式配置各自的 `.service`/`.timer`，运行间隔按节点数量和流量精度需求调整。
+
+`scripts/pilot_hysteria_client.py` 与 `scripts/pilot_vless_client.py` 是一次性人工诊断脚本，用于在排查某个节点握手问题时手动运行，不应加入定时任务。
+
+节点 Agent（`agent/` 目录，独立于以上中心侧脚本）的部署方式见 [agent/README.md](agent/README.md)。
 
 ## 支持的订阅格式
 
@@ -62,6 +100,13 @@
 ├── static/
 │   ├── index.html     # 管理界面入口
 │   └── assets/        # 前端构建产物
+├── .github/
+│   ├── workflows/ci.yml          # lint、格式检查和测试
+│   └── pull_request_template.md
+├── requirements.txt       # 运行依赖
+├── requirements-dev.txt   # 运行依赖 + ruff/black/pytest
+├── pyproject.toml         # ruff/black 配置
+├── .pre-commit-config.yaml
 ├── .gitignore
 └── README.md
 ```
@@ -97,7 +142,7 @@ cd sub-app
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install fastapi 'uvicorn[standard]' sqlalchemy itsdangerous pyyaml httpx
+python -m pip install -r requirements.txt
 
 export SUB_APP_ADMIN_PASSWORD='change-this-password'
 export SUB_APP_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
@@ -125,6 +170,25 @@ uvicorn app.main:app --host 127.0.0.1 --port 8080
 | `GET /sub/{token}` | 生成订阅内容，使用 `target` 选择格式 |
 
 除健康检查和订阅接口外，管理接口需要登录 Cookie。订阅令牌本身等同于访问凭据，应按密码处理。
+
+## 开发规范
+
+```bash
+python -m pip install -r requirements-dev.txt
+pre-commit install   # 可选：提交前自动跑 ruff/black 和基础检查
+```
+
+- 代码风格由 [black](https://black.readthedocs.io/) 统一格式化，静态检查用 [ruff](https://docs.astral.sh/ruff/)；配置见 `pyproject.toml`。
+- 提交前建议本地跑一遍：
+
+  ```bash
+  ruff check .
+  black --check .
+  pytest agent/tests -q
+  ```
+
+- GitHub Actions（`.github/workflows/ci.yml`）在每次 push/PR 到 `master` 时执行同样的检查，PR 请保持 CI 全绿再合并。
+- PR 请使用 `.github/pull_request_template.md` 中的 Summary/Test plan 结构描述改动。
 
 ## 安全注意事项
 

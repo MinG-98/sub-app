@@ -10,7 +10,6 @@ import tempfile
 import time
 from pathlib import Path
 
-import yaml
 from sqlalchemy import select
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -19,7 +18,12 @@ if str(ROOT) not in sys.path:
 
 from app.converter import parse_uri  # noqa: E402
 from app.credentials import credential_values  # noqa: E402
-from app.models import Friend, Node, UserNodeCredential, make_session_factory  # noqa: E402
+from app.models import (  # noqa: E402
+    Friend,
+    Node,
+    UserNodeCredential,
+    make_session_factory,
+)
 
 
 def _load_env():
@@ -112,7 +116,9 @@ def main():
     finally:
         db.close()
 
-    config_path = Path(tempfile.mktemp(prefix="vless-pilot.", suffix=".json", dir="/tmp"))
+    config_path = Path(
+        tempfile.mktemp(prefix="vless-pilot.", suffix=".json", dir="/tmp")
+    )
     log_path = Path(tempfile.mktemp(prefix="vless-pilot-log.", dir="/tmp"))
     config_path.write_text(json_dump(config), encoding="utf-8")
     os.chmod(config_path, 0o600)
@@ -129,15 +135,25 @@ def main():
             return 1
         response = subprocess.run(
             [
-                "curl", "-fsS", "--socks5-hostname", f"127.0.0.1:{pilot_port}",
-                "--max-time", "15", os.environ.get("VLESS_PILOT_URL", "https://sub.m1n6.uk/"),
+                "curl",
+                "-fsS",
+                "--socks5-hostname",
+                f"127.0.0.1:{pilot_port}",
+                "--max-time",
+                "15",
+                os.environ.get("VLESS_PILOT_URL", "https://sub.m1n6.uk/"),
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=18,
         )
         text = log_path.read_text(encoding="utf-8", errors="replace")
-        print("vless_external_handshake_ok", response.returncode == 0, "log_flags", _safe_flags(text))
+        print(
+            "vless_external_handshake_ok",
+            response.returncode == 0,
+            "log_flags",
+            _safe_flags(text),
+        )
         return 0 if response.returncode == 0 else 1
     finally:
         process.terminate()

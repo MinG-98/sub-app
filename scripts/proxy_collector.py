@@ -11,7 +11,6 @@ import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import httpx
 import yaml
@@ -32,9 +31,10 @@ from app.models import (  # noqa: E402
     utcnow,
 )
 
-
 STATUS_PATH = Path(
-    os.environ.get("SUB_APP_PROXY_STATUS", "/var/lib/sub-app/proxy-collector-status.json")
+    os.environ.get(
+        "SUB_APP_PROXY_STATUS", "/var/lib/sub-app/proxy-collector-status.json"
+    )
 )
 RETENTION_DAYS = 30
 VLESS_STATS_BINARY = os.environ.get(
@@ -97,7 +97,9 @@ def collect_hysteria(db, now):
     by_id = {}
     current_time = utcnow().replace(tzinfo=None)
     for row, _friend in rows:
-        if row.status == "grace" and (not row.grace_until or row.grace_until <= current_time):
+        if row.status == "grace" and (
+            not row.grace_until or row.grace_until <= current_time
+        ):
             continue
         if row.status in {"active", "grace"}:
             by_id[credential_stats_id(row)] = row
@@ -156,7 +158,11 @@ def collect_hysteria(db, now):
             flow.bytes_in += delta_in
             flow.bytes_out += delta_out
         written += 1
-    return {"status": "success", "stats_clients": len(stats), "samples_written": written}
+    return {
+        "status": "success",
+        "stats_clients": len(stats),
+        "samples_written": written,
+    }
 
 
 def _vless_stats():
@@ -197,7 +203,9 @@ def collect_vless(db, now):
     by_id = {}
     current_time = utcnow().replace(tzinfo=None)
     for row, _friend in rows:
-        if row.status == "grace" and (not row.grace_until or row.grace_until <= current_time):
+        if row.status == "grace" and (
+            not row.grace_until or row.grace_until <= current_time
+        ):
             continue
         if row.status in {"active", "grace"}:
             by_id[credential_stats_id(row)] = row
@@ -281,7 +289,9 @@ def collect_vless(db, now):
 
 def _write_status(payload):
     STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix="proxy-status.", suffix=".json", dir=str(STATUS_PATH.parent))
+    fd, name = tempfile.mkstemp(
+        prefix="proxy-status.", suffix=".json", dir=str(STATUS_PATH.parent)
+    )
     path = Path(name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -298,35 +308,59 @@ def main():
     factory = make_session_factory(db_path)
     db = factory()
     now = datetime.now(timezone.utc)
-    run = CollectorRun(started_at=now.replace(tzinfo=None), source="proxy", status="running")
+    run = CollectorRun(
+        started_at=now.replace(tzinfo=None), source="proxy", status="running"
+    )
     db.add(run)
     db.commit()
     results = {}
     try:
-        for name, callback in (("hysteria2", collect_hysteria), ("vless", collect_vless)):
+        for name, callback in (
+            ("hysteria2", collect_hysteria),
+            ("vless", collect_vless),
+        ):
             try:
                 results[name] = callback(db, now)
                 db.commit()
             except Exception as exc:
                 db.rollback()
-                results[name] = {"status": "error", "samples_written": 0, "error": type(exc).__name__}
+                results[name] = {
+                    "status": "error",
+                    "samples_written": 0,
+                    "error": type(exc).__name__,
+                }
         db.execute(
             delete(FlowRecord).where(
                 FlowRecord.source.in_(["hysteria2", "vless"]),
-                FlowRecord.bucket < (now.replace(tzinfo=None) - timedelta(days=RETENTION_DAYS)),
+                FlowRecord.bucket
+                < (now.replace(tzinfo=None) - timedelta(days=RETENTION_DAYS)),
             )
         )
         statuses = [item.get("status") for item in results.values()]
-        run.status = "success" if statuses == ["success", "not_ready"] or all(s == "success" for s in statuses) else "partial"
-        run.samples_written = sum(int(item.get("samples_written", 0)) for item in results.values())
+        run.status = (
+            "success"
+            if statuses == ["success", "not_ready"]
+            or all(s == "success" for s in statuses)
+            else "partial"
+        )
+        run.samples_written = sum(
+            int(item.get("samples_written", 0)) for item in results.values()
+        )
         run.nodes_total = 2
         run.finished_at = now.replace(tzinfo=None)
         run.error = "; ".join(
-            f"{name}:{item.get('error')}" for name, item in results.items() if item.get("error")
+            f"{name}:{item.get('error')}"
+            for name, item in results.items()
+            if item.get("error")
         )[:1000]
         db.commit()
         _write_status({"at": now.isoformat(), "status": run.status, "results": results})
-        print(json.dumps({"ok": True, "status": run.status, "results": results}, ensure_ascii=True))
+        print(
+            json.dumps(
+                {"ok": True, "status": run.status, "results": results},
+                ensure_ascii=True,
+            )
+        )
     finally:
         db.close()
 

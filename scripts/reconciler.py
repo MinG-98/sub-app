@@ -22,7 +22,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.credentials import ensure_credential  # noqa: E402
-from app.models import Allocation, Friend, Node, UserNodeCredential, make_session_factory, utcnow  # noqa: E402
+from app.models import (  # noqa: E402
+    Allocation,
+    Friend,
+    Node,
+    UserNodeCredential,
+    make_session_factory,
+    utcnow,
+)
 from app.proxy_adapters import (  # noqa: E402
     SUPPORTED_NODES,
     activate_credential,
@@ -30,9 +37,10 @@ from app.proxy_adapters import (  # noqa: E402
     sync_vless_config,
 )
 
-
 STATUS_PATH = Path(
-    os.environ.get("SUB_APP_RECONCILER_STATUS", "/var/lib/sub-app/reconciler-status.json")
+    os.environ.get(
+        "SUB_APP_RECONCILER_STATUS", "/var/lib/sub-app/reconciler-status.json"
+    )
 )
 
 
@@ -100,7 +108,9 @@ def reconcile(db):
 
 def write_status(payload):
     STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix="reconciler.", suffix=".json", dir=str(STATUS_PATH.parent))
+    fd, name = tempfile.mkstemp(
+        prefix="reconciler.", suffix=".json", dir=str(STATUS_PATH.parent)
+    )
     path = Path(name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -125,7 +135,11 @@ def main():
         print(json.dumps({"ok": True, **payload}, ensure_ascii=True))
     except Exception as exc:
         db.rollback()
-        payload = {"status": "error", "at": started.isoformat(), "error": type(exc).__name__}
+        payload = {
+            "status": "error",
+            "at": started.isoformat(),
+            "error": type(exc).__name__,
+        }
         write_status(payload)
         print(json.dumps({"ok": False, **payload}, ensure_ascii=True))
         raise

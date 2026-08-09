@@ -1,0 +1,19 @@
+[tool.black]
+target-version = ["py310"]
+line-length = 88
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+# Line length is left to black; black does not wrap long strings/URLs/comments,
+# so enforcing E501 alongside it fights the formatter instead of the author.
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+# So a bare `pytest` finds the suite instead of depending on the caller passing
+# a path. The agent is a standalone script loaded by path, so its tests import
+# it via importlib rather than as a package.
+testpaths = ["agent/tests"]

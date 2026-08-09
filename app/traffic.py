@@ -19,9 +19,7 @@ from app.models import (
 
 log = logging.getLogger(__name__)
 
-NEZHA_ENV_FILE = Path(
-    os.environ.get("NEZHA_ENV_FILE", "/etc/sub-app/nezha.env")
-)
+NEZHA_ENV_FILE = Path(os.environ.get("NEZHA_ENV_FILE", "/etc/sub-app/nezha.env"))
 DEFAULT_NEZHA_BASE_URL = "http://127.0.0.1:18008"
 RETENTION_DAYS = 30
 POLL_SECONDS = 300
@@ -53,9 +51,7 @@ def collector_config() -> tuple[str, str]:
         or file_values.get("NEZHA_BASE_URL")
         or DEFAULT_NEZHA_BASE_URL
     ).rstrip("/")
-    token = os.environ.get("NEZHA_API_TOKEN") or file_values.get(
-        "NEZHA_API_TOKEN", ""
-    )
+    token = os.environ.get("NEZHA_API_TOKEN") or file_values.get("NEZHA_API_TOKEN", "")
     return base_url, token.strip()
 
 
@@ -99,9 +95,7 @@ def normalize_server(item: dict) -> dict:
     status = item.get("status")
     state = item.get("state")
     state_metrics = state if isinstance(state, dict) else {}
-    last_active = _as_datetime(
-        item.get("last_active", item.get("last_active_at"))
-    )
+    last_active = _as_datetime(item.get("last_active", item.get("last_active_at")))
     online_value = item.get("online", item.get("is_online"))
     if online_value is None and isinstance(status, dict):
         online_value = status.get("online", status.get("active"))
@@ -129,12 +123,8 @@ def normalize_server(item: dict) -> dict:
         "name": str(item.get("name", "")),
         "online": _online(online_value),
         "last_active": last_active,
-        "net_in_transfer": _as_int(
-            metric_value("net_in_transfer", "transfer_in")
-        ),
-        "net_out_transfer": _as_int(
-            metric_value("net_out_transfer", "transfer_out")
-        ),
+        "net_in_transfer": _as_int(metric_value("net_in_transfer", "transfer_in")),
+        "net_out_transfer": _as_int(metric_value("net_out_transfer", "transfer_out")),
         "net_in_speed": _as_int(metric_value("net_in_speed", "speed_in")),
         "net_out_speed": _as_int(metric_value("net_out_speed", "speed_out")),
     }
@@ -206,9 +196,7 @@ def run_collector(db, now=None, retention_days=RETENTION_DAYS):
     try:
         servers = fetch_servers(base_url, token)
         by_id = {item["id"]: item for item in servers if item["id"]}
-        nodes = db.scalars(
-            select(Node).where(Node.nezha_server_id.is_not(None))
-        ).all()
+        nodes = db.scalars(select(Node).where(Node.nezha_server_id.is_not(None))).all()
         started.nodes_total = len(nodes)
         written = 0
         missing = []
@@ -267,18 +255,14 @@ def run_collector(db, now=None, retention_days=RETENTION_DAYS):
             written += 1
 
         cutoff = _naive_utc(now) - timedelta(days=retention_days)
-        db.execute(
-            delete(NodeMetricSample).where(NodeMetricSample.bucket < cutoff)
-        )
+        db.execute(delete(NodeMetricSample).where(NodeMetricSample.bucket < cutoff))
         db.execute(
             delete(FlowRecord).where(
                 FlowRecord.source == "nezha",
                 FlowRecord.bucket < cutoff,
             )
         )
-        db.execute(
-            delete(CollectorRun).where(CollectorRun.started_at < cutoff)
-        )
+        db.execute(delete(CollectorRun).where(CollectorRun.started_at < cutoff))
         started.samples_written = written
         started.finished_at = collected_at
         started.status = "partial" if missing else "success"

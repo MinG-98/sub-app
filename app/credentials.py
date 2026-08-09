@@ -16,7 +16,10 @@ from app.models import Friend, Node, UserNodeCredential, utcnow
 
 def per_user_feature_enabled() -> bool:
     return os.environ.get("SUB_APP_PER_USER_CREDENTIALS", "0").lower() in {
-        "1", "true", "yes", "on"
+        "1",
+        "true",
+        "yes",
+        "on",
     }
 
 
@@ -89,9 +92,7 @@ def render_credential_uri(node: Node, row: UserNodeCredential) -> str:
     if row.protocol == "vless":
         netloc = f"{quote(values['uuid'])}@{host_port}"
     elif row.protocol == "hysteria2":
-        netloc = (
-            f"{quote(values['username'])}:{quote(values['password'])}@{host_port}"
-        )
+        netloc = f"{quote(values['username'])}:{quote(values['password'])}@{host_port}"
     else:
         raise ValueError(f"unsupported per-user protocol: {row.protocol}")
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
@@ -110,6 +111,8 @@ def credential_public_dict(row: UserNodeCredential) -> dict:
         "rotated_at": row.rotated_at.isoformat() if row.rotated_at else None,
         "revoked_at": row.revoked_at.isoformat() if row.revoked_at else None,
         "grace_until": row.grace_until.isoformat() if row.grace_until else None,
-        "last_synced_at": row.last_synced_at.isoformat() if row.last_synced_at else None,
+        "last_synced_at": (
+            row.last_synced_at.isoformat() if row.last_synced_at else None
+        ),
         "last_error": row.last_error or "",
     }

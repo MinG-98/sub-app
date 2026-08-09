@@ -46,12 +46,16 @@ class Node(Base):
         "Allocation", back_populates="node", cascade="all, delete-orphan"
     )
     metric_samples = relationship(
-        "NodeMetricSample", back_populates="node", cascade="all, delete-orphan",
-        passive_deletes=True
+        "NodeMetricSample",
+        back_populates="node",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     credentials = relationship(
-        "UserNodeCredential", back_populates="node", cascade="all, delete-orphan",
-        passive_deletes=True
+        "UserNodeCredential",
+        back_populates="node",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
 
@@ -59,9 +63,7 @@ class NodeAgent(Base):
     """Root-only node agent registration and last-seen state."""
 
     __tablename__ = "node_agents"
-    __table_args__ = (
-        UniqueConstraint("node_id", name="uq_node_agent_node"),
-    )
+    __table_args__ = (UniqueConstraint("node_id", name="uq_node_agent_node"),)
 
     id = Column(Integer, primary_key=True)
     node_id = Column(
@@ -107,8 +109,10 @@ class Friend(Base):
         "FlowRecord", cascade="all, delete-orphan", passive_deletes=True
     )
     credentials = relationship(
-        "UserNodeCredential", back_populates="friend", cascade="all, delete-orphan",
-        passive_deletes=True
+        "UserNodeCredential",
+        back_populates="friend",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
 
@@ -190,15 +194,18 @@ class ProxyTrafficCounter(Base):
     __tablename__ = "proxy_traffic_counters"
     __table_args__ = (
         UniqueConstraint(
-            "source", "node_id", "credential_key",
-            name="uq_proxy_traffic_counter"
+            "source", "node_id", "credential_key", name="uq_proxy_traffic_counter"
         ),
     )
 
     id = Column(Integer, primary_key=True)
     source = Column(String(32), nullable=False)
-    node_id = Column(Integer, ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False)
-    friend_id = Column(Integer, ForeignKey("friends.id", ondelete="CASCADE"), nullable=False)
+    node_id = Column(
+        Integer, ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False
+    )
+    friend_id = Column(
+        Integer, ForeignKey("friends.id", ondelete="CASCADE"), nullable=False
+    )
     credential_key = Column(String(128), nullable=False)
     last_bytes_in = Column(Integer, default=0, nullable=False)
     last_bytes_out = Column(Integer, default=0, nullable=False)
@@ -258,8 +265,11 @@ class UserNodeCredential(Base):
     __tablename__ = "user_node_credentials"
     __table_args__ = (
         UniqueConstraint(
-            "friend_id", "node_id", "protocol", "version",
-            name="uq_user_node_credential_version"
+            "friend_id",
+            "node_id",
+            "protocol",
+            "version",
+            name="uq_user_node_credential_version",
         ),
     )
 
@@ -296,9 +306,7 @@ def _table_exists(conn, table_name):
 def _column_exists(conn, table_name, column_name):
     return any(
         row[1] == column_name
-        for row in conn.exec_driver_sql(
-            f"PRAGMA table_info({table_name})"
-        ).all()
+        for row in conn.exec_driver_sql(f"PRAGMA table_info({table_name})").all()
     )
 
 
@@ -317,9 +325,12 @@ def migrate_database(engine):
             "CREATE TABLE IF NOT EXISTS schema_migrations ("
             "version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
         )
-        current = conn.exec_driver_sql(
-            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
-        ).scalar() or 0
+        current = (
+            conn.exec_driver_sql(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+            ).scalar()
+            or 0
+        )
 
         # Bootstrap an empty database once. Existing installations are
         # recorded as baseline v1 and are never recreated on every startup.
@@ -342,8 +353,7 @@ def migrate_database(engine):
                 )
             if not _column_exists(conn, "flow_records", "sample_key"):
                 conn.exec_driver_sql(
-                    "ALTER TABLE flow_records ADD COLUMN sample_key "
-                    "VARCHAR(128)"
+                    "ALTER TABLE flow_records ADD COLUMN sample_key " "VARCHAR(128)"
                 )
             conn.exec_driver_sql(
                 "CREATE TABLE IF NOT EXISTS node_metric_samples ("
