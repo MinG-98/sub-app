@@ -18,7 +18,13 @@ spec.loader.exec_module(agent_mod)
 
 
 def render_users(legacy_until, node_spec=None):
-    """Run the user-list part of apply_vless against a fixed desired state."""
+    """Assemble the user list the way apply_vless does.
+
+    The flow value comes from Agent._vless_flow rather than a copy of it, so
+    that reverting the production code fails this test.  The rest mirrors
+    apply_vless closely enough to show what lands in the config.
+    """
+    agent = agent_mod.Agent.__new__(agent_mod.Agent)
     state = {
         "legacy_users": [
             {"uuid": "legacy-uuid", "flow": "xtls-rprx-vision"},
@@ -32,22 +38,32 @@ def render_users(legacy_until, node_spec=None):
         state["legacy_until"]
     ):
         users.extend(state.get("legacy_users", []))
-    flow = next(
-        (
-            item.get("flow")
-            for item in state.get("legacy_users", [])
-            if item.get("flow")
-        ),
-        "",
-    )
-    if not flow:
-        flow = str((node_spec or {}).get("vless_flow", "") or "")
+    flow = agent._vless_flow(state, node_spec or {})
     for item in desired["users"]:
         entry = {"name": item["stats_id"], "uuid": item["uuid"]}
         if flow:
             entry["flow"] = flow
         users.append(entry)
     return users
+
+
+def test_vless_flow_sources():
+    agent = agent_mod.Agent.__new__(agent_mod.Agent)
+
+    snapshot = {"legacy_users": [{"uuid": "u", "flow": "xtls-rprx-vision"}]}
+    assert agent._vless_flow(snapshot, {}) == "xtls-rprx-vision"
+
+    # A snapshot taken from an already-flowless config cannot recover the value
+    # from the node, so the per-node key is the only way back.
+    flowless = {"legacy_users": [{"uuid": "u"}]}
+    assert agent._vless_flow(flowless, {}) == ""
+    assert agent._vless_flow(flowless, {"vless_flow": "xtls-rprx-vision"}) == "xtls-rprx-vision"
+
+    # The snapshot wins over the fallback when both are present.
+    assert agent._vless_flow(snapshot, {"vless_flow": "something-else"}) == "xtls-rprx-vision"
+
+    # Hysteria2-style legacy users have no flow and must not gain one.
+    assert agent._vless_flow({"legacy_users": [{"password": "x"}]}, {}) == ""
 
 
 def test_flow_survives_window():
