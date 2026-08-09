@@ -57,10 +57,16 @@ def test_vless_flow_sources():
     # from the node, so the per-node key is the only way back.
     flowless = {"legacy_users": [{"uuid": "u"}]}
     assert agent._vless_flow(flowless, {}) == ""
-    assert agent._vless_flow(flowless, {"vless_flow": "xtls-rprx-vision"}) == "xtls-rprx-vision"
+    assert (
+        agent._vless_flow(flowless, {"vless_flow": "xtls-rprx-vision"})
+        == "xtls-rprx-vision"
+    )
 
     # The snapshot wins over the fallback when both are present.
-    assert agent._vless_flow(snapshot, {"vless_flow": "something-else"}) == "xtls-rprx-vision"
+    assert (
+        agent._vless_flow(snapshot, {"vless_flow": "something-else"})
+        == "xtls-rprx-vision"
+    )
 
     # Hysteria2-style legacy users have no flow and must not gain one.
     assert agent._vless_flow({"legacy_users": [{"password": "x"}]}, {}) == ""
