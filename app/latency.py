@@ -30,7 +30,8 @@ import yaml
 from sqlalchemy import select
 
 from app.converter import parse_uri
-from app.models import Node, make_session_factory
+from app.credentials import render_credential_uri
+from app.models import Friend, Node, UserNodeCredential, make_session_factory
 
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = os.environ.get("SUB_APP_DB", str(ROOT / "data.db"))
@@ -44,6 +45,7 @@ TMP_ROOT = Path(os.environ.get("SUB_APP_LATENCY_TMP", "/var/lib/sub-app/latency-
 TARGET_URL = os.environ.get(
     "SUB_APP_LATENCY_TARGET", "https://www.gstatic.com/generate_204"
 )
+PROBE_UID = os.environ.get("SUB_APP_LATENCY_PROBE_UID", "TEST")
 LOCAL_HEALTH_URL = os.environ.get(
     "SUB_APP_LATENCY_LOCAL_HEALTH", "http://127.0.0.1:5000/healthz"
 )
@@ -205,7 +207,9 @@ def _target_address() -> str:
 
 
 def _hysteria_probe(parsed: dict) -> dict:
-    auth = parsed.get("user") or parsed.get("password")
+    username = parsed.get("user") or ""
+    password = parsed.get("password") or ""
+    auth = f"{username}:{password}" if username and password else username or password
     if not auth or not shutil.which(HYSTERIA_BIN):
         return _result("unsupported", reason="HY2 探测器未就绪", source="hysteria")
     TMP_ROOT.mkdir(parents=True, exist_ok=True)
@@ -433,6 +437,7 @@ def _probe_node(node: dict) -> dict:
         "node_id": node["id"],
         "name": node["name"],
         "protocol": protocol,
+        "credential_source": node.get("credential_source", "base"),
         "entry": entry,
         "proxy": proxy,
     }
@@ -482,6 +487,29 @@ def run_probes() -> None:
         factory = make_session_factory(DB_PATH)
         db = factory()
         try:
+            probe_friend = db.scalar(
+                select(Friend).where(
+                    Friend.uid == PROBE_UID,
+                    Friend.enabled.is_(True),
+                    Friend.per_user_credentials.is_(True),
+                )
+            )
+            probe_credentials = {}
+            if probe_friend is not None:
+                credential_rows = db.scalars(
+                    select(UserNodeCredential)
+                    .where(
+                        UserNodeCredential.friend_id == probe_friend.id,
+                        UserNodeCredential.status.in_(("active", "grace")),
+                        UserNodeCredential.revoked_at.is_(None),
+                    )
+                    .order_by(
+                        UserNodeCredential.node_id,
+                        UserNodeCredential.version.desc(),
+                    )
+                ).all()
+                for row in credential_rows:
+                    probe_credentials.setdefault(row.node_id, row)
             candidates = db.scalars(
                 select(Node)
                 .where(Node.enabled.is_(True))
@@ -492,12 +520,24 @@ def run_probes() -> None:
                 parsed = parse_uri(item.uri)
                 if _remark_node(item, parsed):
                     continue
+                credential = probe_credentials.get(item.id)
+                if credential is not None:
+                    try:
+                        uri = render_credential_uri(item, credential)
+                        source = f"user:{PROBE_UID}"
+                    except (TypeError, ValueError):
+                        uri = item.uri
+                        source = "base"
+                else:
+                    uri = item.uri
+                    source = "base"
                 nodes.append(
                     {
                         "id": item.id,
                         "name": item.name,
                         "protocol": item.protocol,
-                        "uri": item.uri,
+                        "uri": uri,
+                        "credential_source": source,
                     }
                 )
         finally:
