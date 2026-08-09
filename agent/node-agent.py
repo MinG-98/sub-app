@@ -434,7 +434,21 @@ class Agent:
         users = []
         if state.get("legacy_until") and utcnow() < datetime.fromisoformat(state["legacy_until"]):
             users.extend(state.get("legacy_users", []))
-        flow = next((item.get("flow", "") for item in users if item.get("flow") is not None), "")
+        # Read flow from the persisted snapshot, not from `users`.  `users` only
+        # holds the legacy entries while the compatibility window is open, so
+        # deriving flow from it silently dropped the field from every per-user
+        # entry the moment the window closed — 24h after the first apply.
+        # sing-box then rejected every client with
+        # "flow mismatch: expected none, but got xtls-rprx-vision".
+        flow = next(
+            (item.get("flow") for item in state.get("legacy_users", []) if item.get("flow")),
+            "",
+        )
+        # Last resort if the state file was ever lost: the snapshot would be
+        # retaken from an already-flowless config and the value could not be
+        # recovered from the node itself.
+        if not flow:
+            flow = str(spec.get("vless_flow", "") or "")
         for item in desired.get("users", []):
             entry = {"name": item["stats_id"], "uuid": item["uuid"]}
             if flow:
