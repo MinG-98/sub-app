@@ -63,6 +63,17 @@ nodes, each node's apply must union every named user in the file.  Rebuilding
 from only the current inbound makes the two nodes overwrite each other and
 restart the core forever.  `tests/test_stats_union.py` pins this.
 
+**Read VLESS `flow` from the persisted snapshot, not the windowed user list.**
+The 24h legacy-compatibility list (`legacy_users`) empties once the window
+closes, so deriving `flow` from it silently dropped the field from every
+per-user entry a day after the first apply — sing-box then rejects every
+client with `flow mismatch: expected none, but got xtls-rprx-vision`, while
+the agent itself reports healthy (online, generation matched, config passes
+`sing-box check`).  `flow` is read from the snapshot instead, which is
+captured once and outlives the window.  If a node's snapshot was ever taken
+from an already-flowless config, set `vless_flow` in that node's entry below
+as a fallback.  `tests/test_flow_survives_window.py` pins this.
+
 ## Deploy
 
     install -m 0755 node-agent.py /usr/local/libexec/sub-app-node-agent.py
@@ -85,6 +96,7 @@ Config shape (one entry per node on this machine):
       "sing_box_binary": "/usr/local/bin/sing-box",
       "sing_box_config": "/etc/sing-box/config.json",
       "v2ray_api_listen": "127.0.0.1:10085",
+      "vless_flow": "xtls-rprx-vision",
       "token": "<per-node token>"
     },
     {
@@ -103,6 +115,9 @@ Config shape (one entry per node on this machine):
 
 Omit `engine` for a standalone Hysteria2 process and give `hysteria_config`,
 `auth_port` and `stats_port` instead.
+
+`vless_flow` is optional and only used as a fallback — see "Constraints
+learned the hard way" below.
 
 ## Rollout
 
