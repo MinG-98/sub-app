@@ -41,6 +41,8 @@
 
 延迟探测通常由仪表盘按需触发（`POST /api/admin/latency/probe`），无需单独定时；其余三个脚本建议用 systemd timer 定期执行，例如：
 
+仪表盘触发探测时，`/api/admin/latency/probe` 用当前运行 FastAPI 进程的解释器去启动 `scripts/latency_probe.py`（即 `sys.executable`），所以正常情况下不需要单独配置。仅当你想让它用另一个解释器（比如手动跑的场景与服务进程的 venv 不一致）时才需要设置 `SUB_APP_PYTHON` 覆盖。
+
 ```ini
 # /etc/systemd/system/sub-app-nezha-collector.service
 [Service]
@@ -185,7 +187,7 @@ pre-commit install   # 可选：提交前自动跑 ruff/black 和基础检查
   ```bash
   ruff check .
   black --check .
-  pytest agent/tests -q
+  pytest -q
   ```
 
 - GitHub Actions（`.github/workflows/ci.yml`）在每次 push/PR 到 `master` 时执行同样的检查，PR 请保持 CI 全绿再合并。
