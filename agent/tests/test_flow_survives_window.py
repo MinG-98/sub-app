@@ -18,11 +18,15 @@ spec.loader.exec_module(agent_mod)
 
 
 def render_users(legacy_until, node_spec=None):
-    """Assemble the user list the way apply_vless does.
+    """Assemble the user list the way apply_vless does, calling the real
+    Agent._vless_flow for the flow value.
 
-    The flow value comes from Agent._vless_flow rather than a copy of it, so
-    that reverting the production code fails this test.  The rest mirrors
-    apply_vless closely enough to show what lands in the config.
+    This pins _vless_flow's own behaviour, but NOT whether apply_vless
+    actually calls it — a mutation test proved that reverting apply_vless's
+    call site back to its pre-fix inline expression leaves this file green,
+    because render_users calls _vless_flow directly and never apply_vless.
+    test_apply_vless_flow.py drives the real method end to end and is the
+    test that would catch that regression.
     """
     agent = agent_mod.Agent.__new__(agent_mod.Agent)
     state = {
