@@ -26,7 +26,7 @@ jobs:
         run: black --check .
 
       - name: Compile check
-        run: python -m compileall -q app scripts agent/node-agent.py agent/tests
+        run: python -m compileall -q app scripts agent/node-agent.py agent/tests tests
 
       - name: pytest
         run: pytest -q
