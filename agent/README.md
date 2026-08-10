@@ -95,7 +95,6 @@ Config shape (one entry per node on this machine):
       "sing_box_binary": "/usr/local/bin/sing-box",
       "sing_box_config": "/etc/sing-box/config.json",
       "v2ray_api_listen": "127.0.0.1:10085",
-      "vless_flow": "xtls-rprx-vision",
       "token": "<per-node token>"
     },
     {
@@ -115,8 +114,15 @@ Config shape (one entry per node on this machine):
 Omit `engine` for a standalone Hysteria2 process and give `hysteria_config`,
 `auth_port` and `stats_port` instead.
 
-`vless_flow` is optional and only used as a fallback — see "Constraints
-learned the hard way" below.
+Deliberately left out of the example above: `"vless_flow": "xtls-rprx-vision"`
+is a fallback for the one case in "Constraints learned the hard way" below
+where the persisted snapshot itself has no flow to recover.  It is not a
+normal field and should not be copied into every VLESS node's config —
+setting it on a node that legitimately has no flow makes every client on
+that node fail the same handshake this fallback exists to prevent, just in
+the opposite direction (`flow mismatch: expected xtls-rprx-vision, but got
+none`).  Only add it if a node is dark and the snapshot recovery below
+didn't fix it.
 
 ## Rollout
 
