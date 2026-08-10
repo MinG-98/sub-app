@@ -6,8 +6,10 @@ The probe has three deliberately separate measurements:
 * node entry: a direct connection to the node's advertised endpoint;
 * proxy exit: a request to a public target through the node's real protocol.
 
-Credentials are read only from the local node URI while a probe is running and
-are never written to the status file, logs, or API response.
+Credentials — whether read from the local node URI or, for nodes with an
+active per-user credential for the designated probe user, derived the same
+way a real subscriber's would be — are used only while a probe is running
+and are never written to the status file, logs, or API response.
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ import yaml
 from sqlalchemy import select
 
 from app.converter import parse_uri
-from app.credentials import render_credential_uri
+from app.credentials import per_user_feature_enabled, render_credential_uri
 from app.models import Friend, Node, UserNodeCredential, make_session_factory
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -414,6 +416,7 @@ def _probe_node(node: dict) -> dict:
             "node_id": node["id"],
             "name": node["name"],
             "protocol": node["protocol"],
+            "credential_source": node.get("credential_source", "base"),
             "entry": _result("bad", reason="节点链接无效"),
             "proxy": _result("bad", reason="节点链接无效"),
         }
@@ -487,29 +490,45 @@ def run_probes() -> None:
         factory = make_session_factory(DB_PATH)
         db = factory()
         try:
-            probe_friend = db.scalar(
-                select(Friend).where(
-                    Friend.uid == PROBE_UID,
-                    Friend.enabled.is_(True),
-                    Friend.per_user_credentials.is_(True),
-                )
-            )
+            # Gate on the same conditions the real subscription endpoint
+            # does (app/main.py _friend_uris): the global feature flag,
+            # then friend/status/protocol.  Skipping the flag check here
+            # let the probe measure a per-user path nobody was actually
+            # being served — real subscribers were still on the shared URI
+            # (which is exactly what the agent's 24h legacy window drops)
+            # while the dashboard read the TEST user's still-installed
+            # credential and reported the node healthy.
             probe_credentials = {}
-            if probe_friend is not None:
-                credential_rows = db.scalars(
-                    select(UserNodeCredential)
-                    .where(
-                        UserNodeCredential.friend_id == probe_friend.id,
-                        UserNodeCredential.status.in_(("active", "grace")),
-                        UserNodeCredential.revoked_at.is_(None),
+            if per_user_feature_enabled():
+                probe_friend = db.scalar(
+                    select(Friend).where(
+                        Friend.uid == PROBE_UID,
+                        Friend.enabled.is_(True),
+                        Friend.per_user_credentials.is_(True),
                     )
-                    .order_by(
-                        UserNodeCredential.node_id,
-                        UserNodeCredential.version.desc(),
-                    )
-                ).all()
-                for row in credential_rows:
-                    probe_credentials.setdefault(row.node_id, row)
+                )
+                if probe_friend is not None:
+                    # Only "active", matching the real endpoint: a "grace"
+                    # row is a rotation courtesy for existing clients, not
+                    # something a fresh dial (which is all a probe ever
+                    # does) is entitled to.  Keyed on (node_id, protocol)
+                    # so a node that changed protocol without revoking its
+                    # old-protocol credential can't have that stale row
+                    # rendered onto its current URI.
+                    credential_rows = db.scalars(
+                        select(UserNodeCredential)
+                        .where(
+                            UserNodeCredential.friend_id == probe_friend.id,
+                            UserNodeCredential.status == "active",
+                            UserNodeCredential.revoked_at.is_(None),
+                        )
+                        .order_by(
+                            UserNodeCredential.node_id,
+                            UserNodeCredential.version.desc(),
+                        )
+                    ).all()
+                    for row in credential_rows:
+                        probe_credentials.setdefault((row.node_id, row.protocol), row)
             candidates = db.scalars(
                 select(Node)
                 .where(Node.enabled.is_(True))
@@ -520,12 +539,17 @@ def run_probes() -> None:
                 parsed = parse_uri(item.uri)
                 if _remark_node(item, parsed):
                     continue
-                credential = probe_credentials.get(item.id)
+                credential = probe_credentials.get((item.id, item.protocol))
                 if credential is not None:
                     try:
                         uri = render_credential_uri(item, credential)
                         source = f"user:{PROBE_UID}"
-                    except (TypeError, ValueError):
+                    except (TypeError, ValueError, RuntimeError):
+                        # RuntimeError is credential_values() refusing to
+                        # derive a value without SUB_APP_SECRET — that must
+                        # degrade to the base URI like any other rendering
+                        # failure, not propagate to run_probes' outer catch
+                        # and blank every node's result.
                         uri = item.uri
                         source = "base"
                 else:
