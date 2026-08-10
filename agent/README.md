@@ -15,8 +15,7 @@ reporting instead of failing a central job.
 ## Protocol
 
     GET  /api/agent/v1/desired/<node_id>     -> desired credentials + generation
-    POST /api/agent/v1/heartbeat/<node_id>   <- status, capabilities, applied generation
-    POST /api/agent/v1/traffic/<node_id>     <- per-user byte counters
+    POST /api/agent/v1/heartbeat/<node_id>   <- status, capabilities, applied generation, and per-user byte counters
 
 Each node has its own token; only its hash is stored at the center.
 

@@ -21,6 +21,9 @@ from app.proxy_adapters import (
     SUPPORTED_NODES,
 )
 
+ACTIVE_CREDENTIAL_STATUSES = ("active", "grace")
+APPLICABLE_CREDENTIAL_STATUSES = ("pending", "error", "active")
+
 
 def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -168,9 +171,18 @@ def _record_traffic(db, node_id: int, payload) -> int:
     if not isinstance(payload, list):
         return 0
     rows = db.scalars(
-        select(UserNodeCredential).where(UserNodeCredential.node_id == node_id)
+        select(UserNodeCredential)
+        .join(Friend, Friend.id == UserNodeCredential.friend_id)
+        .where(
+            UserNodeCredential.node_id == node_id,
+            UserNodeCredential.revoked_at.is_(None),
+            UserNodeCredential.status.in_(ACTIVE_CREDENTIAL_STATUSES),
+            Friend.enabled.is_(True),
+            Friend.per_user_credentials.is_(True),
+        )
     ).all()
     by_key = {credential_stats_id(row): row for row in rows}
+    expected_source = SUPPORTED_NODES.get(node_id, {}).get("source")
     written = 0
     for item in payload:
         if not isinstance(item, dict):
@@ -180,11 +192,13 @@ def _record_traffic(db, node_id: int, payload) -> int:
         sample_key = str(item.get("sample_key", ""))[:128]
         if not row or not sample_key:
             continue
+        source = str(item.get("source") or expected_source or row.protocol)[:32]
+        if expected_source and source != expected_source:
+            continue
         try:
             bucket = _utc_naive(datetime.fromisoformat(str(item.get("bucket"))))
         except (TypeError, ValueError):
             bucket = _utc_naive(utcnow())
-        source = str(item.get("source") or row.protocol)[:32]
         statement = (
             insert(FlowRecord)
             .prefix_with("OR IGNORE")
@@ -209,9 +223,14 @@ def _mark_applied(db, node_id: int, generation: str, expected: str) -> int:
     if not generation or not hmac.compare_digest(generation, expected):
         return 0
     rows = db.scalars(
-        select(UserNodeCredential).where(
+        select(UserNodeCredential)
+        .join(Friend, Friend.id == UserNodeCredential.friend_id)
+        .where(
             UserNodeCredential.node_id == node_id,
             UserNodeCredential.revoked_at.is_(None),
+            UserNodeCredential.status.in_(APPLICABLE_CREDENTIAL_STATUSES),
+            Friend.enabled.is_(True),
+            Friend.per_user_credentials.is_(True),
         )
     ).all()
     changed = 0

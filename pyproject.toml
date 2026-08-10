@@ -16,4 +16,5 @@ ignore = ["E501"]
 # So a bare `pytest` finds the suite instead of depending on the caller passing
 # a path. The agent is a standalone script loaded by path, so its tests import
 # it via importlib rather than as a package.
-testpaths = ["agent/tests", "app/tests"]
+testpaths = ["tests", "agent/tests", "app/tests"]
+pythonpath = ["."]

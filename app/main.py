@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 from sqlalchemy import func, select
@@ -1400,6 +1400,8 @@ def subscription(
         raise HTTPException(400, str(exc))
 
     headers = {
+        "cache-control": "private, no-store",
+        "pragma": "no-cache",
         "profile-update-interval": "12",
         "x-sub-app-skipped-nodes": str(len(skipped_nodes)),
         "content-disposition": (
@@ -1422,37 +1424,58 @@ def index():
     return FileResponse(str(STATIC_DIR / "index.html"))
 
 
+def _healthz_details(db) -> dict:
+    """Return operational details for authenticated administrators only."""
+
+    adapters = adapter_marker()
+    proxy_status = {}
+    status_path = Path(
+        os.environ.get(
+            "SUB_APP_PROXY_STATUS", "/var/lib/sub-app/proxy-collector-status.json"
+        )
+    )
+    try:
+        proxy_status = json.loads(status_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        proxy_status = {"status": "never_run"}
+    collector_state = _collector_status(db)
+    return {
+        "ok": True,
+        "generated_at": _iso(utcnow()),
+        "database": "ok",
+        "collector": collector_state,
+        "proxy_collector": proxy_status,
+        "reconciler": collector_state.get("reconciler", {"status": "never_run"}),
+        "agents": agent_health_summary(db),
+        "adapters": {
+            "hysteria2": adapters.get("HY2_HTTP_AUTH") == "1",
+            "vless": adapters.get("VLESS_V2RAY_API") == "1",
+        },
+    }
+
+
 @app.get("/healthz")
 def healthz():
+    """Expose only liveness publicly; operational details require admin auth."""
+
     db = Session()
     try:
-        adapters = adapter_marker()
-        proxy_status = {}
-        status_path = Path(
-            os.environ.get(
-                "SUB_APP_PROXY_STATUS", "/var/lib/sub-app/proxy-collector-status.json"
-            )
+        db.execute(select(1))
+        return {"ok": True, "generated_at": _iso(utcnow())}
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "generated_at": utcnow().isoformat()},
         )
-        try:
-            proxy_status = json.loads(status_path.read_text(encoding="utf-8"))
-        except (FileNotFoundError, ValueError):
-            proxy_status = {"status": "never_run"}
-        collector_state = _collector_status(db)
-        return {
-            "ok": True,
-            "generated_at": _iso(utcnow()),
-            "database": "ok",
-            "collector": collector_state,
-            "proxy_collector": proxy_status,
-            "reconciler": collector_state.get("reconciler", {"status": "never_run"}),
-            "agents": agent_health_summary(db),
-            "adapters": {
-                "hysteria2": adapters.get("HY2_HTTP_AUTH") == "1",
-                "vless": adapters.get("VLESS_V2RAY_API") == "1",
-            },
-        }
     finally:
         db.close()
+
+
+@app.get("/api/admin/healthz")
+def admin_healthz(db=Depends(get_db), _=Depends(require_admin)):
+    """Return the detailed health snapshot to authenticated administrators."""
+
+    return _healthz_details(db)
 
 
 # ---------------------------------------------------------------- node agents
