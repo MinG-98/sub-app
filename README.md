@@ -187,7 +187,7 @@ pre-commit install   # 可选：提交前自动跑 ruff/black 和基础检查
   ```bash
   ruff check .
   black --check .
-  pytest agent/tests -q
+  pytest -q
   ```
 
 - GitHub Actions（`.github/workflows/ci.yml`）在每次 push/PR 到 `master` 时执行同样的检查，PR 请保持 CI 全绿再合并。
