@@ -20,6 +20,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -104,7 +105,13 @@ def start_probe() -> dict:
     try:
         subprocess.Popen(
             [
-                os.environ.get("SUB_APP_PYTHON", str(ROOT / "venv/bin/python")),
+                # Default to the interpreter already running this process —
+                # it's guaranteed to have every dependency installed,
+                # regardless of what the venv happens to be named.  The old
+                # default guessed "venv/bin/python", which silently failed
+                # to start whenever the documented setup ("python3 -m venv
+                # .venv", README.md) was followed instead.
+                os.environ.get("SUB_APP_PYTHON", sys.executable),
                 str(script),
             ],
             cwd=str(ROOT),
