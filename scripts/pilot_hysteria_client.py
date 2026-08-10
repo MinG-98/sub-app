@@ -33,7 +33,7 @@ from app.models import (  # noqa: E402
 
 def main():
     pilot_port = int(os.environ.get("HY2_PILOT_PORT", "28080"))
-    pilot_uid = os.environ.get("HY2_PILOT_UID", "Guan")
+    pilot_uid = os.environ["HY2_PILOT_UID"]
     pilot_node = int(os.environ.get("HY2_PILOT_NODE", "4"))
     factory = make_session_factory(str(ROOT / "data.db"))
     db = factory()
@@ -182,7 +182,7 @@ def main():
                 f"127.0.0.1:{pilot_port}",
                 "--max-time",
                 "12",
-                os.environ.get("HY2_PILOT_URL", "https://sub.m1n6.uk/"),
+                os.environ.get("HY2_PILOT_URL", "https://www.gstatic.com/generate_204"),
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

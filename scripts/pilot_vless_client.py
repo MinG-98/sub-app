@@ -53,7 +53,7 @@ def _safe_flags(text: str):
 def main():
     _load_env()
     pilot_port = int(os.environ.get("VLESS_PILOT_PORT", "28081"))
-    pilot_uid = os.environ.get("VLESS_PILOT_UID", "Guan")
+    pilot_uid = os.environ["VLESS_PILOT_UID"]
     pilot_node = int(os.environ.get("VLESS_PILOT_NODE", "11"))
     factory = make_session_factory(str(ROOT / "data.db"))
     db = factory()
@@ -141,7 +141,9 @@ def main():
                 f"127.0.0.1:{pilot_port}",
                 "--max-time",
                 "15",
-                os.environ.get("VLESS_PILOT_URL", "https://sub.m1n6.uk/"),
+                os.environ.get(
+                    "VLESS_PILOT_URL", "https://www.gstatic.com/generate_204"
+                ),
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

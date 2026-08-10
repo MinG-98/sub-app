@@ -1,10 +1,27 @@
 # Sub App
 
 [![CI](https://github.com/MinG-98/sub-app/actions/workflows/ci.yml/badge.svg)](https://github.com/MinG-98/sub-app/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 
 基于 FastAPI + Vue 3 的轻量节点订阅管理系统，用于集中维护代理节点、为不同用户分配节点、采集节点状态与流量，并生成 V2Ray/Clash 兼容的订阅内容。
 
-当前仓库是私有仓库，面向个人部署与运维使用。线上实例地址为 `https://sub.m1n6.uk`。
+代码开源以供参考；线上实例仅供本人个人使用，不开放注册，具体地址不在此公开。
+
+## 目录
+
+- [功能](#功能)
+- [观测与拓扑](#观测与拓扑)
+- [运维脚本与定时任务](#运维脚本与定时任务)
+- [支持的订阅格式](#支持的订阅格式)
+- [技术栈](#技术栈)
+- [项目结构](#项目结构)
+- [配置](#配置)
+- [本地运行](#本地运行)
+- [主要接口](#主要接口)
+- [开发规范](#开发规范)
+- [安全注意事项](#安全注意事项)
+- [License](#license)
 
 ## 功能
 
