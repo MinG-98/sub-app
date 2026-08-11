@@ -1421,7 +1421,15 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 @app.get("/")
 def index():
-    return FileResponse(str(STATIC_DIR / "index.html"))
+    # index.html has no Cache-Control by default, so a plain (non-hard)
+    # refresh can serve a browser-cached copy pointing at an old, already
+    # replaced build's hashed asset filenames — defeating the whole point of
+    # content-hashed assets, which rely on index.html itself always being
+    # revalidated. no-cache still allows a cheap 304 via Last-Modified; it
+    # just stops the browser from skipping that check.
+    return FileResponse(
+        str(STATIC_DIR / "index.html"), headers={"Cache-Control": "no-cache"}
+    )
 
 
 def _healthz_details(db) -> dict:
