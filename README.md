@@ -100,7 +100,7 @@ WantedBy=timers.target
 - SQLAlchemy + SQLite
 - itsdangerous 会话签名
 - PyYAML
-- Vue 3 前端（线上使用构建后的静态 JS/CSS 资源）
+- Vue 3 + Vite 前端（源码见 `frontend/`，线上使用构建后的静态 JS/CSS 资源）
 - httpx（哪吒 API 和本地采集器）
 
 ## 项目结构
@@ -116,8 +116,9 @@ WantedBy=timers.target
 │   ├── main.py        # FastAPI 应用、管理 API 和订阅接口
 │   └── models.py      # SQLAlchemy 数据模型
 ├── scripts/           # 哪吒、代理核心和节点 Agent 的采集/同步脚本
+├── frontend/          # 管理界面源码（Vue 3 + Vite，构建产物输出到 static/）
 ├── static/
-│   ├── index.html     # 管理界面入口
+│   ├── index.html     # 管理界面入口（由 frontend/ 构建生成，不要手改）
 │   └── assets/        # 前端构建产物
 ├── .github/
 │   ├── workflows/ci.yml          # lint、格式检查和测试
@@ -172,6 +173,19 @@ uvicorn app.main:app --host 127.0.0.1 --port 8080
 ```
 
 数据库表会在应用首次启动时自动创建。正式部署时建议让 Caddy、Nginx 或其他反向代理负责 HTTPS，并将 Uvicorn 仅绑定在回环地址或受控内网地址。
+
+### 前端开发
+
+管理界面源码在 `frontend/`（Vue 3 + Vite），构建产物直接输出到 `static/`，由 FastAPI 在 `/` 和 `/static` 提供服务：
+
+```bash
+cd frontend
+npm install
+npm run dev     # 本地开发，通过 vite 代理转发 /api、/sub、/healthz 到 127.0.0.1:8080
+npm run build   # 构建并覆盖 ../static
+```
+
+`npm run dev` 默认将 API 请求代理到 `http://127.0.0.1:8080`（对应上一节的本地运行命令），需要本地已启动后端。提交代码前请运行 `npm run build`，将构建产物一并提交到 `static/`。
 
 ## 主要接口
 
