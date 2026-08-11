@@ -37,6 +37,32 @@ function probeMeter(entry) {
   return { pct: 0, cls: "critical", label: entry.value || "未测试" };
 }
 
+// Computed once and reused for both the row rendering and the overall-status
+// chip below, instead of building the same { state, ms } literal three times
+// per row inline in the template.
+const controlMeter = computed(() => probeMeter(latency.value?.control));
+const entryMeter = computed(() =>
+  probeMeter({
+    state: latency.value?.summary?.entry_avg_ms != null ? "ok" : "bad",
+    ms: latency.value?.summary?.entry_avg_ms,
+  })
+);
+const proxyMeter = computed(() =>
+  probeMeter({
+    state: latency.value?.summary?.proxy_avg_ms != null ? "ok" : "bad",
+    ms: latency.value?.summary?.proxy_avg_ms,
+  })
+);
+
+const PROBE_SEVERITY = { ok: 0, warn: 1, critical: 2 };
+const PROBE_OVERALL_TEXT = { ok: "全部正常", warn: "部分偏高，需关注", critical: "存在异常，需处理" };
+const overallProbe = computed(() => {
+  const worst = [controlMeter.value, entryMeter.value, proxyMeter.value].reduce((a, b) =>
+    PROBE_SEVERITY[b.cls] > PROBE_SEVERITY[a.cls] ? b : a
+  );
+  return { cls: worst.cls, text: PROBE_OVERALL_TEXT[worst.cls] };
+});
+
 async function load() {
   loading.value = true;
   try {
@@ -145,24 +171,27 @@ onMounted(load);
           <div><div class="panel-eyebrow">Latency Probe</div><div class="panel-title">延迟探针</div></div>
           <button class="panel-link" :disabled="probing" @click="runProbe">{{ probing ? "触发中…" : "重新探测" }}</button>
         </div>
+        <div class="probe-summary">
+          <span class="chip" :class="overallProbe.cls">{{ overallProbe.text }}</span>
+          <span v-if="latency.finished_at" class="probe-summary-time">上次探测：{{ timeAgo(latency.finished_at) }}</span>
+        </div>
         <div class="probe-row">
           <div class="probe-name">控制面</div>
-          <div class="probe-meter"><div class="probe-fill" :class="probeMeter(latency.control).cls" :style="{ width: probeMeter(latency.control).pct + '%' }"></div></div>
-          <div class="probe-value mono">{{ probeMeter(latency.control).label }}</div>
+          <div class="probe-meter"><div class="probe-fill" :class="controlMeter.cls" :style="{ width: controlMeter.pct + '%' }"></div></div>
+          <div class="probe-value mono">{{ controlMeter.label }}</div>
         </div>
         <div class="probe-row">
           <div class="probe-name">节点入口</div>
-          <div class="probe-meter"><div class="probe-fill" :class="probeMeter({ state: latency.summary?.entry_avg_ms != null ? 'ok' : 'bad', ms: latency.summary?.entry_avg_ms }).cls" :style="{ width: probeMeter({ state: latency.summary?.entry_avg_ms != null ? 'ok' : 'bad', ms: latency.summary?.entry_avg_ms }).pct + '%' }"></div></div>
-          <div class="probe-value mono">{{ probeMeter({ state: latency.summary?.entry_avg_ms != null ? 'ok' : 'bad', ms: latency.summary?.entry_avg_ms }).label }}</div>
+          <div class="probe-meter"><div class="probe-fill" :class="entryMeter.cls" :style="{ width: entryMeter.pct + '%' }"></div></div>
+          <div class="probe-value mono">{{ entryMeter.label }}</div>
         </div>
         <div class="probe-row">
           <div class="probe-name">代理出口</div>
-          <div class="probe-meter"><div class="probe-fill" :class="probeMeter({ state: latency.summary?.proxy_avg_ms != null ? 'ok' : 'bad', ms: latency.summary?.proxy_avg_ms }).cls" :style="{ width: probeMeter({ state: latency.summary?.proxy_avg_ms != null ? 'ok' : 'bad', ms: latency.summary?.proxy_avg_ms }).pct + '%' }"></div></div>
-          <div class="probe-value mono">{{ probeMeter({ state: latency.summary?.proxy_avg_ms != null ? 'ok' : 'bad', ms: latency.summary?.proxy_avg_ms }).label }}</div>
+          <div class="probe-meter"><div class="probe-fill" :class="proxyMeter.cls" :style="{ width: proxyMeter.pct + '%' }"></div></div>
+          <div class="probe-value mono">{{ proxyMeter.label }}</div>
         </div>
         <div class="probe-footnote">
           入口为节点端口握手，出口为通过节点访问 {{ latency.target?.url || "外部探测目标" }}；不使用普通网页延迟冒充代理延迟。
-          <template v-if="latency.finished_at">上次探测：{{ timeAgo(latency.finished_at) }}</template>
         </div>
       </div>
     </div>
