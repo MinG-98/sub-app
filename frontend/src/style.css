@@ -161,7 +161,13 @@ h1.sm{ font-size:26px; }
 .kpi-sub.warn{ color:var(--warn); }
 
 /* Panels */
-.grid2{ display:grid; grid-template-columns:1.35fr 1fr; gap:14px; align-items:start; margin-bottom:14px; }
+/* stretch, not start: side-by-side panels here hold very different amounts of
+   content (a 2x2 node grid vs three thin probe rows), and independent
+   (start-aligned) heights left the shorter one visibly unbalanced against its
+   neighbour. Stretching + flex-column on the panel itself lets the sparser
+   one anchor its footnote to the bottom instead of leaving dead space. */
+.grid2{ display:grid; grid-template-columns:1.35fr 1fr; gap:14px; align-items:stretch; margin-bottom:14px; }
+.grid2 > .panel{ display:flex; flex-direction:column; }
 .panel{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px 20px 20px; margin-bottom:14px; }
 .panel:last-child{ margin-bottom:0; }
 .panel-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; gap:12px; flex-wrap:wrap; }
@@ -235,6 +241,9 @@ tr:last-child td{ border-bottom:none; }
 .probe-fill.warn{ background:var(--warn); }
 .probe-fill.critical{ background:var(--critical); }
 .probe-value{ width:64px; flex:none; text-align:right; font-family:var(--font-mono); font-size:12.5px; }
+/* margin-top:auto pins this to the bottom of the stretched panel (see
+   .grid2 > .panel) instead of leaving unclaimed space below the three rows. */
+.probe-footnote{ margin-top:auto; padding-top:12px; border-top:1px solid var(--line-soft); font-size:11px; color:var(--text-faint); line-height:1.5; }
 
 .legend{ display:flex; flex-wrap:wrap; gap:18px; }
 .legend-item{ display:flex; align-items:center; gap:9px; }

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { api } from "../api.js";
 import { pushToast } from "../store.js";
@@ -11,6 +11,13 @@ const stats = ref(null);
 const nodes = ref([]);
 const latency = ref(null);
 const probing = ref(false);
+
+// Announcement entries (e.g. "请更新订阅") are stored as real node rows so
+// they show up in subscription clients, but they point at 127.0.0.1 and are
+// never wired to a collector. Real proxy nodes never use loopback as their
+// server, so that's what distinguishes them here — the overview is about
+// operational node health, not messages meant for end users.
+const realNodes = computed(() => nodes.value.filter((n) => n.server !== "127.0.0.1"));
 
 function nodeStatus(node) {
   if (!node.enabled) return { cls: "off", dot: "off", text: "已停用" };
@@ -114,9 +121,9 @@ onMounted(load);
           </div>
           <button class="panel-link" @click="router.push({ name: 'nodes' })">查看全部 →</button>
         </div>
-        <div v-if="!nodes.length" class="panel-empty">尚未添加任何节点</div>
+        <div v-if="!realNodes.length" class="panel-empty">尚未添加任何节点</div>
         <div v-else class="nodes">
-          <div v-for="n in nodes.slice(0, 4)" :key="n.id" class="node-card" :style="!n.enabled ? 'opacity:0.6' : ''">
+          <div v-for="n in realNodes.slice(0, 4)" :key="n.id" class="node-card" :style="!n.enabled ? 'opacity:0.6' : ''">
             <div class="node-top">
               <div class="node-id">
                 <span class="dot" :class="nodeStatus(n).dot"></span>
@@ -153,7 +160,7 @@ onMounted(load);
           <div class="probe-meter"><div class="probe-fill" :class="probeMeter({ state: latency.summary?.proxy_avg_ms != null ? 'ok' : 'bad', ms: latency.summary?.proxy_avg_ms }).cls" :style="{ width: probeMeter({ state: latency.summary?.proxy_avg_ms != null ? 'ok' : 'bad', ms: latency.summary?.proxy_avg_ms }).pct + '%' }"></div></div>
           <div class="probe-value mono">{{ probeMeter({ state: latency.summary?.proxy_avg_ms != null ? 'ok' : 'bad', ms: latency.summary?.proxy_avg_ms }).label }}</div>
         </div>
-        <div style="margin-top:14px;font-size:11px;color:var(--text-faint)">
+        <div class="probe-footnote">
           入口为节点端口握手，出口为通过节点访问 {{ latency.target?.url || "外部探测目标" }}；不使用普通网页延迟冒充代理延迟。
           <template v-if="latency.finished_at">上次探测：{{ timeAgo(latency.finished_at) }}</template>
         </div>
