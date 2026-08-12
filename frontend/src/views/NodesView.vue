@@ -11,6 +11,8 @@ const error = ref("");
 const nodes = ref([]);
 const search = ref("");
 const statusFilter = ref("all");
+const sortKey = ref("name");
+const sortDir = ref("asc");
 
 const showBulkModal = ref(false);
 const bulkText = ref("");
@@ -47,6 +49,36 @@ const filtered = computed(() => {
     return statusMatch && queryMatch;
   });
 });
+
+function toggleSort(key) {
+  if (sortKey.value === key) sortDir.value = sortDir.value === "asc" ? "desc" : "asc";
+  else {
+    sortKey.value = key;
+    sortDir.value = "asc";
+  }
+}
+
+function sortArrow(key) {
+  return sortKey.value === key ? (sortDir.value === "asc" ? "▲" : "▼") : "";
+}
+
+function nodeSortValue(node, key) {
+  if (key === "traffic") return Number(node.traffic?.["24h"]?.total || 0);
+  if (key === "status") return nodeStatus(node).text;
+  return String(key === "protocol" ? node.protocol : node.name || "").toLowerCase();
+}
+
+const sortedNodes = computed(() => {
+  const direction = sortDir.value === "asc" ? 1 : -1;
+  return [...filtered.value].sort((a, b) => {
+    const left = nodeSortValue(a, sortKey.value);
+    const right = nodeSortValue(b, sortKey.value);
+    if (typeof left === "number" && typeof right === "number") return (left - right) * direction;
+    return String(left).localeCompare(String(right), "zh-CN") * direction;
+  });
+});
+
+const maxTraffic = computed(() => Math.max(1, ...sortedNodes.value.map((node) => Number(node.traffic?.["24h"]?.total || 0))));
 
 function adapterText(node) {
   return node.per_user_capability?.ready ? "已适配" : "无";
@@ -167,22 +199,23 @@ onMounted(load);
   <section v-else-if="error" class="state-wrap"><div class="st" role="alert"><b>节点加载失败</b><span>{{ error }}</span><button class="b b-am" @click="load">重试</button></div></section>
   <section v-else-if="!filtered.length" class="state-wrap"><div class="st"><b>没有匹配的节点</b><span>调整搜索词或筛选条件后再试。</span></div></section>
 
-  <div v-else class="entity-grid node-grid">
-    <article v-for="node in filtered" :key="node.id" class="entity" :class="{ 'is-muted': !node.enabled }">
-      <header class="entity-hd">
-        <div class="entity-title"><span class="mk" :class="statusTone(node)"></span><div><h3>{{ node.name }}</h3><p>{{ node.server }} · {{ node.port }}</p></div></div>
-        <span class="proto">{{ node.protocol }}</span>
-      </header>
-      <div class="entity-summary"><span class="mk" :class="statusTone(node)">{{ nodeStatus(node).text }}</span><span v-if="node.collector?.last_active">{{ timeAgo(node.collector.last_active) }}</span></div>
-      <div class="kv-grid">
-        <div class="kv"><span class="lbl-cn">24h 流量</span><strong>{{ formatBytes(node.traffic?.['24h']?.total) }}</strong></div>
-        <div class="kv"><span class="lbl-cn">已分配</span><strong>{{ node.allocated_to || 0 }} 人</strong></div>
-        <div class="kv"><span class="lbl-cn">哪吒</span><strong>{{ node.collector?.mapped ? "已关联" : "未关联" }}</strong></div>
-        <div class="kv"><span class="lbl-cn">适配器</span><strong>{{ adapterText(node) }}</strong></div>
+  <div v-else class="entity-grid node-table">
+    <div class="table-head">
+      <button class="table-head-cell" type="button" :aria-sort="sortKey === 'name' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'" @click="toggleSort('name')">节点 <span>{{ sortArrow('name') }}</span></button>
+      <button class="table-head-cell" type="button" :aria-sort="sortKey === 'protocol' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'" @click="toggleSort('protocol')">协议 / 入口 <span>{{ sortArrow('protocol') }}</span></button>
+      <button class="table-head-cell" type="button" :aria-sort="sortKey === 'traffic' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'" @click="toggleSort('traffic')">24h 流量 <span>{{ sortArrow('traffic') }}</span></button>
+      <button class="table-head-cell" type="button" :aria-sort="sortKey === 'status' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'" @click="toggleSort('status')">状态 <span>{{ sortArrow('status') }}</span></button>
+      <span class="table-head-label">操作</span>
+    </div>
+    <article v-for="node in sortedNodes" :key="node.id" class="entity table-row" :class="{ 'is-muted': !node.enabled }">
+      <div class="table-cell table-main">
+        <span class="status-dot" :class="statusTone(node)"></span>
+        <div class="table-main-copy"><h3>{{ node.name }}</h3><span>ID {{ node.id }} · 已分配 {{ node.allocated_to || 0 }} 人</span></div>
       </div>
-      <div class="entity-actions">
-        <span class="lbl-cn">ID <span class="n">{{ node.id }}</span></span><button class="b" @click="openEdit(node)">查看与编辑</button>
-      </div>
+      <div class="table-cell"><strong>{{ node.protocol }}</strong><span>{{ node.server }}:{{ node.port }}</span></div>
+      <div class="table-cell table-flow"><strong>{{ formatBytes(node.traffic?.['24h']?.total || 0) }}</strong><div class="bar table-bar"><i :style="{ '--meter': `${Math.max(2, Math.round((Number(node.traffic?.['24h']?.total || 0) / maxTraffic) * 100))}%` }"></i></div></div>
+      <div class="table-cell"><strong class="table-state" :class="statusTone(node)">{{ nodeStatus(node).text }}</strong><span>{{ node.collector?.last_active ? timeAgo(node.collector.last_active) : "尚未上报" }}</span></div>
+      <div class="table-actions"><button class="b b-am" @click="openEdit(node)">查看与编辑</button></div>
     </article>
   </div>
 

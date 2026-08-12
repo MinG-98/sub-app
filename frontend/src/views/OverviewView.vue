@@ -16,6 +16,7 @@ const latency = ref({});
 const devices = ref([]);
 const collector = ref({});
 const range = ref("24h");
+const metric = ref("traffic");
 const probing = ref(false);
 
 const showAnnouncement = ref(false);
@@ -213,6 +214,15 @@ onMounted(load);
   </section>
 
   <template v-else>
+    <header class="view-hd overview-hd">
+      <div class="view-copy">
+        <span class="lbl lbl-am">Overview</span>
+        <h2>概览</h2>
+        <p>节点、用户、探针与系统健康状态总览。</p>
+      </div>
+      <span class="lbl">Live data</span>
+    </header>
+
     <div class="kpis">
       <div v-for="item in kpis" :key="item.label" class="kpi">
         <span class="lbl-cn">{{ item.label }}</span>
@@ -223,43 +233,52 @@ onMounted(load);
     </div>
 
     <div class="grid">
-      <section class="p c7" aria-labelledby="h-traffic">
-        <div class="p-hd">
-          <h2 id="h-traffic">节点流量</h2>
-          <div class="seg" role="group" aria-label="时间范围">
+      <section class="p c12 metric-panel" aria-labelledby="h-metric">
+        <div class="metric-head">
+          <div class="metric-tabs" role="tablist" aria-label="概览指标">
+            <button id="h-metric" class="metric-tab" :class="{ active: metric === 'traffic' }" role="tab" :aria-selected="metric === 'traffic'" @click="metric = 'traffic'">节点流量</button>
+            <button class="metric-tab" :class="{ active: metric === 'activity' }" role="tab" :aria-selected="metric === 'activity'" @click="metric = 'activity'">用户拉取活跃度</button>
+          </div>
+          <div v-if="metric === 'traffic'" class="seg" role="group" aria-label="时间范围">
             <button v-for="item in ['24h','7d','30d','all']" :key="item" :aria-pressed="range === item" @click="range = item">{{ item === "all" ? "全部" : item }}</button>
           </div>
+          <span v-else class="lbl">Fetch count</span>
         </div>
-        <div v-if="traffic.shown.length" class="rows">
-          <div v-for="row in traffic.shown" :key="row.id" class="row">
-            <div class="row-nm">{{ row.name }}</div><div class="row-vl">{{ row.bytes == null ? "无数据" : formatBytes(row.bytes) }}</div>
-            <div class="row-bar"><div class="bar"><i :style="{ '--meter': `${row.pct}%` }"></i></div></div>
-            <div v-if="row.off" class="row-sub"><span class="mk idle">已停用</span></div>
-          </div>
-        </div>
-        <div v-else class="st"><b>暂无流量数据</b><span>还没有节点上报统计。</span></div>
-        <div class="p-ft"><template v-if="range === 'all'">「全部」区间当前显示 30d 数据。</template>共 {{ traffic.rows.length }} 个节点，已显示流量最高的前 {{ traffic.shown.length }} 个 · <a href="#" @click.prevent="router.push({name:'nodes'})">查看节点 →</a></div>
-      </section>
 
-      <section class="p c5" aria-labelledby="h-activity">
-        <div class="p-hd"><h2 id="h-activity">用户拉取活跃度</h2><span class="lbl">Fetch count</span></div>
-        <div v-if="activity.length" class="rows">
-          <div v-for="row in activity" :key="row.uid" class="row">
-            <div class="row-nm">{{ row.uid }}</div><div class="row-vl">{{ row.fetches.toLocaleString("zh-CN") }} 次</div>
-            <div class="row-bar"><div class="bar"><i class="info" :style="{ '--meter': `${row.pct}%` }"></i></div></div>
-            <div class="row-sub"><span>{{ row.devices }} 台设备</span></div>
+        <template v-if="metric === 'traffic'">
+          <div v-if="traffic.shown.length" class="rows">
+            <div v-for="row in traffic.shown" :key="row.id" class="row">
+              <div class="row-line"><div class="row-nm">{{ row.name }}</div><div class="row-vl">{{ row.bytes == null ? "无数据" : formatBytes(row.bytes) }}</div></div>
+              <div class="row-bar"><div class="bar"><i :style="{ '--meter': `${row.pct}%` }"></i></div></div>
+              <div v-if="row.off" class="row-sub"><span class="mk idle">已停用</span></div>
+            </div>
           </div>
-        </div>
-        <div v-else class="st"><b>暂无拉取记录</b><span>还没有客户端拉取过订阅。</span></div>
-        <div class="p-ft">统计订阅链接被客户端拉取的次数，按设备归属用户聚合 —— 与代理流量无关。</div>
+          <div v-else class="st"><b>暂无流量数据</b><span>还没有节点上报统计。</span></div>
+          <div class="p-ft"><template v-if="range === 'all'">「全部」区间当前显示 30d 数据。</template>共 {{ traffic.rows.length }} 个节点，已显示流量最高的前 {{ traffic.shown.length }} 个 · <a href="#" @click.prevent="router.push({name:'nodes'})">查看节点 →</a></div>
+        </template>
+
+        <template v-else>
+          <div v-if="activity.length" class="rows">
+            <div v-for="row in activity" :key="row.uid" class="row">
+              <div class="row-line"><div class="row-nm">{{ row.uid }}</div><div class="row-vl">{{ row.fetches.toLocaleString("zh-CN") }} 次</div></div>
+              <div class="row-bar"><div class="bar"><i class="info" :style="{ '--meter': `${row.pct}%` }"></i></div></div>
+              <div class="row-sub"><span>{{ row.devices }} 台设备</span></div>
+            </div>
+          </div>
+          <div v-else class="st"><b>暂无拉取记录</b><span>还没有客户端拉取过订阅。</span></div>
+          <div class="p-ft">统计订阅链接被客户端拉取的次数，按设备归属用户聚合 —— 与代理流量无关。</div>
+        </template>
       </section>
 
       <section class="p c6" aria-labelledby="h-probe">
         <div class="p-hd"><h2 id="h-probe">延迟探针</h2><button class="b b-am" :disabled="probing" @click="runProbe">{{ probing ? "探测中…" : "手动探测" }}</button></div>
         <div>
+          <div class="probe-meters">
           <div v-for="item in probe.meters" :key="item.label" class="mtr">
-            <div class="mtr-nm">{{ item.label }}</div><div class="bar"><i :class="item.tone" :style="{ '--meter': `${item.pct}%` }"></i></div><div class="mtr-vl">{{ item.text }}</div>
+            <div class="mtr-head"><div class="mtr-nm">{{ item.label }}</div><div class="mtr-vl" :class="item.tone">{{ item.text }}</div></div>
+            <div class="bar"><i :class="item.tone" :style="{ '--meter': `${item.pct}%` }"></i></div>
             <div v-if="item.reachability" class="mtr-sub">{{ item.reachability }}</div>
+          </div>
           </div>
           <div class="lbl-cn">最近探测 {{ timeAgo(latency.finished_at) }}<span v-if="latency.target?.url" class="n"> · {{ latency.target.url.replace(/^https?:\/\//, "") }}</span></div>
         </div>
@@ -280,7 +299,7 @@ onMounted(load);
         <div class="p-hd"><h2 id="h-ann">备注节点</h2><button class="b" @click="openAnnouncement()">新增</button></div>
         <div v-if="announcements.length">
           <div v-for="node in announcements" :key="node.id" class="ann">
-            <div class="ann-ic">{{ node.enabled ? "◆" : "◇" }}</div><div class="ann-nm">{{ node.name }}</div><span class="mk" :class="node.enabled ? 'ok' : 'idle'">{{ node.enabled ? "已发布" : "草稿" }}</span>
+            <div class="ann-nm">{{ node.name }}</div><span class="mk" :class="node.enabled ? 'ok' : 'idle'">{{ node.enabled ? "已发布" : "草稿" }}</span>
             <div class="ann-ac"><button class="b" @click="openAnnouncement(node)">编辑</button><button class="b" @click="toggleAnnouncement(node)">{{ node.enabled ? "取消发布" : "发布" }}</button></div>
           </div>
         </div>

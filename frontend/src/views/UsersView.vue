@@ -12,6 +12,8 @@ const friends = ref([]);
 const nodes = ref([]);
 const search = ref("");
 const filter = ref("all");
+const sortKey = ref("uid");
+const sortDir = ref("asc");
 
 const showForm = ref(false);
 const editing = ref(null);
@@ -50,6 +52,35 @@ const filtered = computed(() => {
       || (filter.value === "enabled" && friend.enabled)
       || (filter.value === "attention" && (!friend.enabled || friend.flow_alert === "over" || friend.credential_status?.some((row) => ["error", "pending"].includes(row.status))));
     return queryMatch && filterMatch;
+  });
+});
+
+function toggleSort(key) {
+  if (sortKey.value === key) sortDir.value = sortDir.value === "asc" ? "desc" : "asc";
+  else {
+    sortKey.value = key;
+    sortDir.value = "asc";
+  }
+}
+
+function sortArrow(key) {
+  return sortKey.value === key ? (sortDir.value === "asc" ? "▲" : "▼") : "";
+}
+
+function userSortValue(friend, key) {
+  if (key === "nodes") return realNodeCount(friend);
+  if (key === "flow") return Number(friend.flow_used_bytes || 0);
+  if (key === "cred") return authState(friend).text;
+  return String(friend.uid || "").toLowerCase();
+}
+
+const sortedFriends = computed(() => {
+  const direction = sortDir.value === "asc" ? 1 : -1;
+  return [...filtered.value].sort((a, b) => {
+    const left = userSortValue(a, sortKey.value);
+    const right = userSortValue(b, sortKey.value);
+    if (typeof left === "number" && typeof right === "number") return (left - right) * direction;
+    return String(left).localeCompare(String(right), "zh-CN") * direction;
   });
 });
 
@@ -230,28 +261,23 @@ onMounted(load);
   <section v-else-if="error" class="state-wrap"><div class="st" role="alert"><b>用户加载失败</b><span>{{ error }}</span><button class="b b-am" @click="load">重试</button></div></section>
   <section v-else-if="!filtered.length" class="state-wrap"><div class="st"><b>没有匹配的用户</b><span>调整搜索词或筛选条件后再试。</span></div></section>
 
-  <div v-else class="entity-grid user-grid">
-    <article v-for="friend in filtered" :key="friend.id" class="entity" :class="{ 'is-muted': !friend.enabled }">
-      <header class="entity-hd">
-        <div class="entity-title"><span class="mk" :class="friend.enabled ? 'ok' : 'idle'"></span><div><h3>{{ friend.uid }}</h3><p>{{ friend.remark || "无备注" }}</p></div></div>
-        <span class="mk" :class="authState(friend).tone">{{ authState(friend).text }}</span>
-      </header>
-      <div class="kv-grid">
-        <div class="kv"><span class="lbl-cn">真实节点</span><strong>{{ realNodeCount(friend) }}</strong></div>
-        <div class="kv"><span class="lbl-cn">设备</span><strong>{{ friend.device_count }}{{ friend.device_limit ? ` / ${friend.device_limit}` : "" }}</strong></div>
+  <div v-else class="entity-grid user-table">
+    <div class="table-head">
+      <button class="table-head-cell" type="button" :aria-sort="sortKey === 'uid' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'" @click="toggleSort('uid')">用户 <span>{{ sortArrow('uid') }}</span></button>
+      <button class="table-head-cell" type="button" :aria-sort="sortKey === 'nodes' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'" @click="toggleSort('nodes')">节点 / 设备 <span>{{ sortArrow('nodes') }}</span></button>
+      <button class="table-head-cell" type="button" :aria-sort="sortKey === 'flow' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'" @click="toggleSort('flow')">用户级流量 <span>{{ sortArrow('flow') }}</span></button>
+      <button class="table-head-cell" type="button" :aria-sort="sortKey === 'cred' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'" @click="toggleSort('cred')">凭据 <span>{{ sortArrow('cred') }}</span></button>
+      <span class="table-head-label">操作</span>
+    </div>
+    <article v-for="friend in sortedFriends" :key="friend.id" class="entity table-row" :class="{ 'is-muted': !friend.enabled }">
+      <div class="table-cell table-main">
+        <span class="status-dot" :class="friend.enabled ? 'ok' : 'idle'"></span>
+        <div class="table-main-copy"><h3>{{ friend.uid }}</h3><span>{{ friend.remark || "无备注" }}</span></div>
       </div>
-      <div class="quota" :class="quotaTone(friend)">
-        <div class="quota-line"><span>用户级流量</span><span>{{ formatBytes(friend.flow_used_bytes) }} / {{ friend.flow_limit_bytes ? formatBytes(friend.flow_limit_bytes) : "不限" }}</span></div>
-        <div v-if="friend.flow_limit_bytes" class="bar"><i :style="{ '--meter': `${Math.min(100, friend.flow_percent)}%` }"></i></div>
-      </div>
-      <div class="entity-actions">
-        <div class="entity-actions-group"><button class="b" @click="copyText(friend.links.clash, 'Clash 订阅链接')">复制 Clash</button><button class="b" @click="copyText(friend.links.v2ray, 'V2Ray 订阅链接')">复制 V2Ray</button></div>
-        <button class="b b-am" @click="openEdit(friend)">查看与编辑</button>
-      </div>
-      <div class="entity-actions">
-        <span class="lbl-cn">创建于 {{ timeAgo(friend.created_at) }}</span>
-        <div class="entity-actions-group"><button class="b b-txt" @click="toggleEnabled(friend)">{{ friend.enabled ? "停用" : "启用" }}</button><button class="b b-txt b-bad" @click="removeFriend(friend)">删除</button></div>
-      </div>
+      <div class="table-cell"><strong>{{ realNodeCount(friend) }} 个节点</strong><span>{{ friend.device_count || 0 }}{{ friend.device_limit ? ` / ${friend.device_limit}` : "" }} 台设备</span></div>
+      <div class="table-cell table-flow"><strong>{{ formatBytes(friend.flow_used_bytes || 0) }} / {{ friend.flow_limit_bytes ? formatBytes(friend.flow_limit_bytes) : "不限" }}</strong><div v-if="friend.flow_limit_bytes" class="bar table-bar"><i :class="quotaTone(friend)" :style="{ '--meter': `${Math.min(100, Number(friend.flow_percent || 0))}%` }"></i></div></div>
+      <div class="table-cell"><strong class="table-state" :class="authState(friend).tone">{{ authState(friend).text }}</strong><span>{{ friend.flow_alert === "over" ? "配额已超" : `创建于 ${timeAgo(friend.created_at)}` }}</span></div>
+      <div class="table-actions"><button class="b" @click="copyText(friend.links?.clash, '订阅链接')">复制订阅</button><button class="b b-am" @click="openEdit(friend)">查看与编辑</button></div>
     </article>
   </div>
 
@@ -290,6 +316,7 @@ onMounted(load);
       </div>
     </details>
 
-    <div class="modal-foot"><button class="b" @click="showForm = false">取消</button><button class="b b-am" :disabled="busy" @click="submit">{{ busy ? "保存中…" : "保存" }}</button></div>
+    <div v-if="editing" class="modal-foot between"><div class="modal-foot-group"><button class="b b-txt" @click="toggleEnabled(editing)">{{ editing.enabled ? "停用用户" : "启用用户" }}</button><button class="b b-txt b-bad" @click="removeFriend(editing)">删除用户</button></div><div class="modal-foot-group"><button class="b" @click="showForm = false">取消</button><button class="b b-am" :disabled="busy" @click="submit">{{ busy ? "保存中…" : "保存" }}</button></div></div>
+    <div v-else class="modal-foot"><button class="b" @click="showForm = false">取消</button><button class="b b-am" :disabled="busy" @click="submit">{{ busy ? "保存中…" : "保存" }}</button></div>
   </Modal>
 </template>
