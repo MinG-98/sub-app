@@ -3,7 +3,8 @@
 The probe has three deliberately separate measurements:
 
 * control plane: the US application's local health endpoint;
-* node entry: a direct connection to the node's advertised endpoint;
+* node entry: a direct TCP connection for TCP-based protocols, or a real
+  Hysteria QUIC handshake for Hysteria2;
 * proxy exit: a request to a public target through the node's real protocol.
 
 Credentials — whether read from the local node URI or, for nodes with an
@@ -22,11 +23,12 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
+from queue import Empty, Queue
 from urllib.request import Request, urlopen
 
 import yaml
@@ -57,7 +59,9 @@ SING_BOX_BIN = os.environ.get(
     "SUB_APP_SING_BOX_PROBE_BIN", "/usr/local/libexec/sub-app-sing-box-probe"
 )
 
-TIME_RE = re.compile(r'"time"\s*:\s*"([0-9]+(?:\.[0-9]+)?)ms"')
+HYSTERIA_CONNECTED_RE = re.compile(r"connected to server", re.IGNORECASE)
+HY2_HANDSHAKE_TIMEOUT = 10.0
+HY2_EXIT_TIMEOUT = 15.0
 
 
 def _now() -> str:
@@ -208,21 +212,30 @@ def _local_probe() -> dict:
         return _result("bad", reason="控制面不可达", source="healthz")
 
 
-def _target_address() -> str:
-    parsed = urlsplit(TARGET_URL)
-    host = parsed.hostname or "www.gstatic.com"
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    return _endpoint(host, port)
+def _hysteria_client_config(parsed: dict, local_port: int) -> dict:
+    """Build the smallest safe Hysteria client config for a probe.
 
+    A parsed subscription URI is the source of truth here.  Passing the URI
+    through as ``server`` lets Hysteria parse every supported URI option
+    itself (auth, SNI, insecure, pinSHA256, ECH and both obfuscation modes).
+    The explicit-field fallback exists only for callers that construct a
+    parsed mapping in isolation; normal probes always have ``uri`` from
+    ``parse_uri``.
+    """
 
-def _hysteria_probe(parsed: dict) -> dict:
+    uri = str(parsed.get("uri") or "").strip()
+    if uri.lower().startswith(("hysteria2://", "hy2://")):
+        return {
+            "server": uri,
+            "socks5": {
+                "listen": _endpoint("127.0.0.1", local_port),
+                "disableUDP": True,
+            },
+        }
+
     username = parsed.get("user") or ""
     password = parsed.get("password") or ""
     auth = f"{username}:{password}" if username and password else username or password
-    if not auth or not shutil.which(HYSTERIA_BIN):
-        return _result("unsupported", reason="HY2 探测器未就绪", source="hysteria")
-    TMP_ROOT.mkdir(parents=True, exist_ok=True)
-    os.chmod(TMP_ROOT, 0o700)
     config = {
         "server": _endpoint(parsed["host"], int(parsed["port"])),
         "auth": auth,
@@ -231,15 +244,132 @@ def _hysteria_probe(parsed: dict) -> dict:
             "insecure": str(parsed.get("params", {}).get("insecure", "")).lower()
             in {"1", "true"},
         },
+        "socks5": {
+            "listen": _endpoint("127.0.0.1", local_port),
+            "disableUDP": True,
+        },
     }
     params = parsed.get("params", {})
-    if params.get("obfs"):
+    obfs_type = str(params.get("obfs") or "").lower()
+    if obfs_type == "salamander":
         config["obfs"] = {
-            "type": params["obfs"],
+            "type": "salamander",
             "salamander": {"password": params.get("obfs-password", "")},
         }
+    elif obfs_type == "gecko":
+        config["obfs"] = {
+            "type": "gecko",
+            "gecko": {"password": params.get("obfs-password", "")},
+        }
+    elif obfs_type:
+        raise ValueError("unsupported Hysteria obfuscation mode")
+    return config
+
+
+def _wait_for_local_listener(process, port: int, timeout: float = 3.0) -> bool:
+    """Wait until the temporary Hysteria SOCKS5 listener accepts TCP."""
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            return False
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                return True
+        except OSError:
+            time.sleep(0.05)
+    return False
+
+
+def _hysteria_failure_reason(output: str, *, connected: bool) -> str:
+    """Classify a Hysteria failure without exposing command output."""
+
+    lower = output.lower()
+    if not connected:
+        if any(
+            marker in lower
+            for marker in (
+                "failed to load client config",
+                "failed to parse client config",
+                "invalid config",
+                "unknown field",
+                "yaml",
+            )
+        ):
+            return "HY2 探测配置无效"
+        if any(
+            marker in lower
+            for marker in ("authentication", "auth failed", "unauthorized")
+        ):
+            return "HY2 认证失败"
+        if any(marker in lower for marker in ("timeout", "i/o timeout")):
+            return "HY2 QUIC 握手超时"
+        if any(
+            marker in lower for marker in ("network is unreachable", "no route to host")
+        ):
+            return "HY2 网络不可达"
+        return "HY2 QUIC 握手失败"
+    if any(marker in lower for marker in ("timeout", "i/o timeout")):
+        return "HY2 代理出口超时"
+    return "HY2 代理出口失败"
+
+
+def _hysteria_probe_results(parsed: dict) -> tuple[dict, dict]:
+    """Return ``(entry, proxy)`` from one real Hysteria QUIC probe.
+
+    Hysteria2 is UDP/QUIC, so a TCP connect to its advertised port is not an
+    entry test.  Start a temporary Hysteria client with a loopback SOCKS5
+    listener, use its ``connected to server`` log as the protocol-native
+    handshake checkpoint, and only then send the target request through that
+    listener.  This keeps a successful QUIC handshake visible even when the
+    remote target or the server's outbound path fails.
+    """
+
+    username = parsed.get("user") or ""
+    password = parsed.get("password") or ""
+    auth = f"{username}:{password}" if username and password else username or password
+    unavailable = _result(
+        "unsupported", reason="HY2 探测器未就绪", source="hysteria-quic"
+    )
+    if not auth or not shutil.which(HYSTERIA_BIN):
+        return unavailable, {**unavailable, "source": "hysteria-socks5"}
+
     path = None
+    process = None
+    reader = None
+    output_queue = Queue()
+    output_lines = []
+
+    def read_output():
+        if process is None or process.stdout is None:
+            output_queue.put(None)
+            return
+        try:
+            for line in process.stdout:
+                output_queue.put(line)
+        finally:
+            output_queue.put(None)
+
+    def drain_output():
+        while True:
+            try:
+                line = output_queue.get_nowait()
+            except Empty:
+                return
+            if line is None:
+                return
+            output_lines.append(line)
+
     try:
+        port_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            port_sock.bind(("127.0.0.1", 0))
+            local_port = port_sock.getsockname()[1]
+        finally:
+            port_sock.close()
+        TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        os.chmod(TMP_ROOT, 0o700)
+        config = _hysteria_client_config(parsed, local_port)
         fd, name = tempfile.mkstemp(prefix="hy2-", suffix=".yaml", dir=str(TMP_ROOT))
         path = Path(name)
         os.chmod(path, 0o600)
@@ -252,28 +382,141 @@ def _hysteria_probe(parsed: dict) -> dict:
             "info",
             "-c",
             str(path),
-            "ping",
-            _target_address(),
+            "client",
         ]
-        completed = subprocess.run(
-            command, capture_output=True, text=True, timeout=14, check=False
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            start_new_session=True,
         )
-        output = (completed.stdout or "") + "\n" + (completed.stderr or "")
-        match = TIME_RE.search(output)
-        if completed.returncode == 0 and match:
-            return _result(
-                "ok", max(1, round(float(match.group(1)))), source="hysteria-ping"
+        reader = threading.Thread(target=read_output, daemon=True)
+        reader.start()
+        handshake_started = time.perf_counter()
+        connected = False
+        deadline = time.monotonic() + HY2_HANDSHAKE_TIMEOUT
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                reader.join(timeout=0.2)
+                drain_output()
+                break
+            try:
+                line = output_queue.get(timeout=min(0.2, deadline - time.monotonic()))
+            except Empty:
+                continue
+            if line is None:
+                break
+            output_lines.append(line)
+            if HYSTERIA_CONNECTED_RE.search(line):
+                connected = True
+                break
+
+        output = "".join(output_lines)
+        if not connected:
+            reason = (
+                "HY2 QUIC 握手超时"
+                if time.monotonic() >= deadline
+                else _hysteria_failure_reason(output, connected=False)
             )
-        if completed.returncode == 0:
-            return _result("ok", source="hysteria-ping")
-        return _result("bad", reason="HY2 握手或出口失败", source="hysteria-ping")
-    except subprocess.TimeoutExpired:
-        return _result("bad", reason="代理出口超时", source="hysteria-ping")
-    except (OSError, ValueError, yaml.YAMLError):
-        return _result("bad", reason="HY2 探测失败", source="hysteria-ping")
+            return (
+                _result("bad", reason=reason, source="hysteria-quic"),
+                _result(
+                    "bad",
+                    reason=f"{reason}，未验证代理出口",
+                    source="hysteria-socks5",
+                ),
+            )
+
+        entry = _result(
+            "ok",
+            max(1, round((time.perf_counter() - handshake_started) * 1000)),
+            reason="HY2 QUIC 握手成功",
+            source="hysteria-quic",
+        )
+        if not _wait_for_local_listener(process, local_port):
+            return entry, _result(
+                "bad",
+                reason="HY2 SOCKS5 探测入口未就绪",
+                source="hysteria-socks5",
+            )
+
+        curl = shutil.which("curl") or "/usr/bin/curl"
+        if not shutil.which(curl):
+            return entry, _result(
+                "unsupported",
+                reason="HY2 出口探测器未就绪",
+                source="hysteria-socks5",
+            )
+        exit_started = time.perf_counter()
+        try:
+            completed = subprocess.run(
+                [
+                    curl,
+                    "--socks5-hostname",
+                    f"127.0.0.1:{local_port}",
+                    "-sS",
+                    "-o",
+                    os.devnull,
+                    "-w",
+                    "%{http_code}",
+                    "--connect-timeout",
+                    "5",
+                    "--max-time",
+                    str(int(HY2_EXIT_TIMEOUT)),
+                    TARGET_URL,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=HY2_EXIT_TIMEOUT + 3,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return entry, _result(
+                "bad",
+                reason="HY2 代理出口超时",
+                source="hysteria-socks5",
+            )
+        code = (completed.stdout or "").strip()
+        if completed.returncode == 0 and code[:1] in {"2", "3"}:
+            return entry, _result(
+                "ok",
+                max(1, round((time.perf_counter() - exit_started) * 1000)),
+                source="hysteria-socks5",
+            )
+        return entry, _result(
+            "bad",
+            reason="HY2 代理出口失败",
+            source="hysteria-socks5",
+        )
+    except (KeyError, OSError, TypeError, ValueError, yaml.YAMLError):
+        reason = "HY2 探测配置或执行失败"
+        return (
+            _result("bad", reason=reason, source="hysteria-quic"),
+            _result("bad", reason=reason, source="hysteria-socks5"),
+        )
     finally:
+        if process is not None:
+            process.terminate()
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=3)
+            if process.stdout is not None:
+                process.stdout.close()
+        if reader is not None:
+            reader.join(timeout=1)
         if path is not None:
             path.unlink(missing_ok=True)
+
+
+def _hysteria_probe(parsed: dict) -> dict:
+    """Return only the proxy result for compatibility with older callers."""
+
+    _entry, proxy = _hysteria_probe_results(parsed)
+    return proxy
 
 
 def _sing_box_config(parsed: dict, port: int) -> dict:
@@ -429,14 +672,7 @@ def _probe_node(node: dict) -> dict:
         }
     protocol = parsed.get("scheme", node["protocol"])
     if protocol == "hysteria2":
-        proxy = _hysteria_probe(parsed)
-        entry = dict(proxy)
-        entry["source"] = "hysteria-handshake"
-        entry["reason"] = (
-            "HY2 握手与代理出口同次验证"
-            if proxy.get("state") == "ok"
-            else proxy.get("reason", "")
-        )
+        entry, proxy = _hysteria_probe_results(parsed)
     elif protocol == "vless":
         entry = _socket_probe(parsed["host"], int(parsed["port"]))
         proxy = _sing_box_probe(parsed)
