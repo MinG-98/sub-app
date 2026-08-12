@@ -305,8 +305,7 @@ def _hysteria_failure_reason(output: str, *, connected: bool) -> str:
         if any(marker in lower for marker in ("timeout", "i/o timeout")):
             return "HY2 QUIC 握手超时"
         if any(
-            marker in lower
-            for marker in ("network is unreachable", "no route to host")
+            marker in lower for marker in ("network is unreachable", "no route to host")
         ):
             return "HY2 网络不可达"
         return "HY2 QUIC 握手失败"
