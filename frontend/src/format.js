@@ -28,3 +28,13 @@ export function timeAgo(iso) {
   const diffDay = Math.round(diffHour / 24);
   return `${diffDay} 天前`;
 }
+
+export function formatLatency(ms, fallback = "未测试") {
+  const value = Number(ms);
+  return ms == null || Number.isNaN(value) ? fallback : `${value.toLocaleString("zh-CN")} ms`;
+}
+
+export function formatPercent(value, digits = 0) {
+  const number = Number(value);
+  return `${(Number.isFinite(number) ? number : 0).toFixed(digits)}%`;
+}
