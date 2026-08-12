@@ -248,7 +248,7 @@ onMounted(load);
         <template v-if="metric === 'traffic'">
           <div v-if="traffic.shown.length" class="rows">
             <div v-for="row in traffic.shown" :key="row.id" class="row">
-              <div class="row-nm">{{ row.name }}</div><div class="row-vl">{{ row.bytes == null ? "无数据" : formatBytes(row.bytes) }}</div>
+              <div class="row-line"><div class="row-nm">{{ row.name }}</div><div class="row-vl">{{ row.bytes == null ? "无数据" : formatBytes(row.bytes) }}</div></div>
               <div class="row-bar"><div class="bar"><i :style="{ '--meter': `${row.pct}%` }"></i></div></div>
               <div v-if="row.off" class="row-sub"><span class="mk idle">已停用</span></div>
             </div>
@@ -260,7 +260,7 @@ onMounted(load);
         <template v-else>
           <div v-if="activity.length" class="rows">
             <div v-for="row in activity" :key="row.uid" class="row">
-              <div class="row-nm">{{ row.uid }}</div><div class="row-vl">{{ row.fetches.toLocaleString("zh-CN") }} 次</div>
+              <div class="row-line"><div class="row-nm">{{ row.uid }}</div><div class="row-vl">{{ row.fetches.toLocaleString("zh-CN") }} 次</div></div>
               <div class="row-bar"><div class="bar"><i class="info" :style="{ '--meter': `${row.pct}%` }"></i></div></div>
               <div class="row-sub"><span>{{ row.devices }} 台设备</span></div>
             </div>
@@ -273,9 +273,12 @@ onMounted(load);
       <section class="p c6" aria-labelledby="h-probe">
         <div class="p-hd"><h2 id="h-probe">延迟探针</h2><button class="b b-am" :disabled="probing" @click="runProbe">{{ probing ? "探测中…" : "手动探测" }}</button></div>
         <div>
+          <div class="probe-meters">
           <div v-for="item in probe.meters" :key="item.label" class="mtr">
-            <div class="mtr-nm">{{ item.label }}</div><div class="bar"><i :class="item.tone" :style="{ '--meter': `${item.pct}%` }"></i></div><div class="mtr-vl">{{ item.text }}</div>
+            <div class="mtr-head"><div class="mtr-nm">{{ item.label }}</div><div class="mtr-vl" :class="item.tone">{{ item.text }}</div></div>
+            <div class="bar"><i :class="item.tone" :style="{ '--meter': `${item.pct}%` }"></i></div>
             <div v-if="item.reachability" class="mtr-sub">{{ item.reachability }}</div>
+          </div>
           </div>
           <div class="lbl-cn">最近探测 {{ timeAgo(latency.finished_at) }}<span v-if="latency.target?.url" class="n"> · {{ latency.target.url.replace(/^https?:\/\//, "") }}</span></div>
         </div>
@@ -296,7 +299,7 @@ onMounted(load);
         <div class="p-hd"><h2 id="h-ann">备注节点</h2><button class="b" @click="openAnnouncement()">新增</button></div>
         <div v-if="announcements.length">
           <div v-for="node in announcements" :key="node.id" class="ann">
-            <div class="ann-ic">{{ node.enabled ? "◆" : "◇" }}</div><div class="ann-nm">{{ node.name }}</div><span class="mk" :class="node.enabled ? 'ok' : 'idle'">{{ node.enabled ? "已发布" : "草稿" }}</span>
+            <div class="ann-nm">{{ node.name }}</div><span class="mk" :class="node.enabled ? 'ok' : 'idle'">{{ node.enabled ? "已发布" : "草稿" }}</span>
             <div class="ann-ac"><button class="b" @click="openAnnouncement(node)">编辑</button><button class="b" @click="toggleAnnouncement(node)">{{ node.enabled ? "取消发布" : "发布" }}</button></div>
           </div>
         </div>

@@ -12,6 +12,8 @@ const devices = ref([]);
 const friends = ref([]);
 const search = ref("");
 const filter = ref("all");
+const sortKey = ref("label");
+const sortDir = ref("asc");
 
 const showCreate = ref(false);
 const createFriendId = ref("");
@@ -47,6 +49,35 @@ const filtered = computed(() => {
       || (filter.value === "attention" && !device.blocked && device.fetch_count > ATTENTION_THRESHOLD)
       || (filter.value === "blocked" && device.blocked);
     return queryMatch && filterMatch;
+  });
+});
+
+function toggleSort(key) {
+  if (sortKey.value === key) sortDir.value = sortDir.value === "asc" ? "desc" : "asc";
+  else {
+    sortKey.value = key;
+    sortDir.value = "asc";
+  }
+}
+
+function sortArrow(key) {
+  return sortKey.value === key ? (sortDir.value === "asc" ? "▲" : "▼") : "";
+}
+
+function deviceSortValue(device, key) {
+  if (key === "fetches") return Number(device.fetch_count || 0);
+  if (key === "state") return statusState(device).text;
+  if (key === "uid") return String(device.friend_uid || "").toLowerCase();
+  return String(device.label || `设备 #${device.id}`).toLowerCase();
+}
+
+const sortedDevices = computed(() => {
+  const direction = sortDir.value === "asc" ? 1 : -1;
+  return [...filtered.value].sort((a, b) => {
+    const left = deviceSortValue(a, sortKey.value);
+    const right = deviceSortValue(b, sortKey.value);
+    if (typeof left === "number" && typeof right === "number") return (left - right) * direction;
+    return String(left).localeCompare(String(right), "zh-CN") * direction;
   });
 });
 
@@ -195,20 +226,23 @@ onMounted(load);
   <section v-else-if="error" class="state-wrap"><div class="st" role="alert"><b>设备加载失败</b><span>{{ error }}</span><button class="b b-am" @click="load">重试</button></div></section>
   <section v-else-if="!filtered.length" class="state-wrap"><div class="st"><b>没有匹配的设备</b><span>调整搜索词或筛选条件后再试。</span></div></section>
 
-  <div v-else class="entity-grid device-grid">
-    <article v-for="device in filtered" :key="device.id" class="entity" :class="{ 'is-muted': device.blocked }">
-      <header class="entity-hd">
-        <div class="entity-title"><span class="mk" :class="statusState(device).tone"></span><div><h3>{{ device.label || `设备 #${device.id}` }}</h3><p>{{ device.friend_uid }} · ID {{ device.id }}</p></div></div>
-        <span class="mk" :class="statusState(device).tone">{{ statusState(device).text }}</span>
-      </header>
-      <div class="kv-grid">
-        <div class="kv"><span class="lbl-cn">访问标识</span><strong>{{ maskedIdentifier(device) }}</strong></div>
-        <div class="kv"><span class="lbl-cn">来源</span><strong>{{ identityState(device).text }}</strong></div>
-        <div class="kv"><span class="lbl-cn">最近 IP</span><strong>{{ device.last_ip || "—" }}</strong></div>
-        <div class="kv"><span class="lbl-cn">拉取次数</span><strong>{{ Number(device.fetch_count || 0).toLocaleString("zh-CN") }}</strong></div>
+  <div v-else class="entity-grid device-table">
+    <div class="table-head">
+      <button class="table-head-cell" type="button" :aria-sort="sortKey === 'label' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'" @click="toggleSort('label')">设备 <span>{{ sortArrow('label') }}</span></button>
+      <button class="table-head-cell" type="button" :aria-sort="sortKey === 'uid' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'" @click="toggleSort('uid')">用户 / 客户端 <span>{{ sortArrow('uid') }}</span></button>
+      <button class="table-head-cell" type="button" :aria-sort="sortKey === 'fetches' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'" @click="toggleSort('fetches')">拉取次数 <span>{{ sortArrow('fetches') }}</span></button>
+      <button class="table-head-cell" type="button" :aria-sort="sortKey === 'state' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'" @click="toggleSort('state')">状态 <span>{{ sortArrow('state') }}</span></button>
+      <span class="table-head-label">操作</span>
+    </div>
+    <article v-for="device in sortedDevices" :key="device.id" class="entity table-row" :class="{ 'is-muted': device.blocked }">
+      <div class="table-cell table-main">
+        <span class="status-dot" :class="statusState(device).tone"></span>
+        <div class="table-main-copy"><h3>{{ device.label || `设备 #${device.id}` }}</h3><span>ID {{ device.id }} · {{ identityState(device).text }}</span></div>
       </div>
-      <div class="row-sub"><span>客户端：{{ device.user_agent || "—" }}</span><span>最近活跃：{{ timeAgo(device.last_seen) }}</span></div>
-      <div class="entity-actions"><span class="mk" :class="identityState(device).tone">{{ identityState(device).text }}</span><button class="b b-am" @click="openDetail(device)">查看详情</button></div>
+      <div class="table-cell"><strong>{{ device.friend_uid || "—" }}</strong><span class="table-wrap-anywhere">{{ device.user_agent || "—" }}</span></div>
+      <div class="table-cell"><strong>{{ Number(device.fetch_count || 0).toLocaleString("zh-CN") }} 次</strong><span>{{ maskedIdentifier(device) }}</span></div>
+      <div class="table-cell"><strong class="table-state" :class="statusState(device).tone">{{ statusState(device).text }}</strong><span>{{ device.last_ip || "—" }} · {{ timeAgo(device.last_seen) }}</span></div>
+      <div class="table-actions"><button class="b b-am" @click="openDetail(device)">查看详情</button></div>
     </article>
   </div>
 
